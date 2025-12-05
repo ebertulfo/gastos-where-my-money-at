@@ -1,6 +1,8 @@
 import "pdf-parse/worker";
 import { PDFParse } from "pdf-parse";
 import type { ParsedTable } from "./types";
+import { sanitizeDescription } from "./types";
+import { generateTransactionIdentifier } from "../transaction-identifier";
 
 /** Minimum text length to consider a PDF as text-based (not scanned) */
 const MIN_TEXT_LENGTH = 50;
@@ -44,8 +46,17 @@ export async function extractTablesFromPdf(
     }
 
     // Detect statement type based on content
-    const isBankStatement = /withdrawal|deposit|balance brought forward/i.test(textResult.text);
-    const isCreditCard = /credit card|card number|statement date|minimum payment|previous balance/i.test(textResult.text);
+    // Credit card detection: Look for specific credit card indicators
+    // Must NOT have withdrawal/deposit column headers (which indicate bank statements)
+    const hasBankColumns = /withdrawal.*deposit|deposit.*withdrawal|withdrawals\s+sgd|deposits\s+sgd/i.test(textResult.text);
+    const hasCreditCardIndicators = /credit card|visa.*card|mastercard|minimum payment|previous balance|new transactions/i.test(textResult.text);
+    
+    // Bank statement: has withdrawal/deposit columns OR "balance brought forward" pattern
+    const isBankStatement = hasBankColumns || /balance brought forward|balance b\/f/i.test(textResult.text);
+    // Credit card: has credit card indicators AND does NOT have bank columns
+    const isCreditCard = hasCreditCardIndicators && !hasBankColumns;
+    // Infer a default year from statement text to handle date strings without a year (e.g., "19 SEP")
+    const defaultYear = inferDefaultYearFromText(textResult.text);
 
     // Use page-level text extraction for better accuracy
     const allRows: string[][] = [];
@@ -114,10 +125,12 @@ export async function extractTablesFromPdf(
           // We use a small threshold to handle floating point issues
           if (balanceDiff < -0.001) {
             // This is a withdrawal - include it
+            // Sanitize description to remove sensitive patterns
             withdrawalRows.push([
               row[0], // Date
-              row[1], // Description
+              sanitizeDescription(row[1]), // Description (sanitized)
               row[AMOUNT_IDX], // Amount
+              row[BALANCE_IDX] || "", // Balance after transaction
             ]);
           }
           // If balanceDiff >= 0, it's a deposit - skip it
@@ -132,31 +145,47 @@ export async function extractTablesFromPdf(
       filteredRows = withdrawalRows;
 
       // Simplify headers: Date, Description, Amount
-      filteredHeaders = ["Date", "Description", "Amount"];
+      filteredHeaders = ["Date", "Description", "Amount", "Balance"];
     } else if (isCreditCard) {
       // Credit card extraction already returns [Date, Description, Amount]
       // Just need to filter out any remaining non-transaction rows
-      filteredRows = allRows.filter((row) => {
-        const description = row[1]?.trim() || '';
-        const amount = row[2]?.trim() || '';
-        
-        // Skip if no amount
-        if (!amount || !/\d/.test(amount)) return false;
-        
-        // Skip rows with very long descriptions (likely preamble that slipped through)
-        if (description.length > 150) return false;
-        
-        return true;
-      });
+      filteredRows = allRows
+        .filter((row) => {
+          const description = row[1]?.trim() || '';
+          const amount = row[2]?.trim() || '';
+          
+          // Skip if no amount
+          if (!amount || !/\d/.test(amount)) return false;
+          
+          // Skip rows with very long descriptions (likely preamble that slipped through)
+          if (description.length > 150) return false;
+          
+          return true;
+        })
+        // Sanitize descriptions to remove sensitive patterns
+        .map((row) => [
+          row[0], // Date
+          sanitizeDescription(row[1]), // Description (sanitized)
+          row[2], // Amount
+          "", // Balance not present on credit card statements (placeholder for ID format)
+        ]);
 
-      filteredHeaders = ["Date", "Description", "Amount"];
+      filteredHeaders = ["Date", "Description", "Amount", "Balance"];
     }
+
+    // Append identifiers to every row
+    const rowsWithIds = appendIdentifiers(filteredRows, {
+      defaultYear,
+      // Credit card statements often have no running balance; use 0.00 as placeholder to satisfy the identifier format.
+      balanceFallback: "0.00",
+    });
+    const headersWithId = filteredHeaders ? [...filteredHeaders, "Identifier"] : null;
 
     // Return a single consolidated table
     const consolidatedTable: ParsedTable = {
       page: 1, // Represents "all pages"
-      headers: filteredHeaders,
-      rows: filteredRows,
+      headers: headersWithId,
+      rows: rowsWithIds,
     };
 
     return [consolidatedTable];
@@ -516,6 +545,9 @@ function isSummaryOrEndLine(line: string): boolean {
 /**
  * Checks if a line is a non-transaction line that should be skipped
  * (preamble, headers, card info, etc.)
+ * 
+ * NOTE: Balance B/F rows are NOT skipped here - they need to be parsed
+ * to establish the initial balance for withdrawal/deposit detection.
  */
 function isNonTransactionLine(line: string): boolean {
   const skipPatterns = [
@@ -537,7 +569,7 @@ function isNonTransactionLine(line: string): boolean {
     /\baltitude\s+visa/i,
     /\b\d{4}\s+\d{4}\s+\d{4}\s+\d{4}\b/,     // Card numbers
     /\d+\.\d{2}\s+CR\s*$/i,                   // Ends with amount + "CR" (payment credit)
-    /\bbalance\s+b\/?f\b/i,                  // Balance B/F or Balance BF
+    // NOTE: Balance B/F is intentionally NOT skipped - needed for balance tracking
     /per\s+annum\b/i,
     /late\s+payment\s+charge\b/i,
     /\$\s*\$/,                                // "$  $" pattern from statement header
@@ -756,4 +788,80 @@ export function guessHeaders(rows: string[][]): string[] | null {
   const allCellsHaveLetters = firstRow.every((cell) => /[A-Za-z]/.test(cell));
 
   return allCellsHaveLetters ? firstRow : null;
+}
+
+/**
+ * Infer a default year from the statement text to support date strings without a year.
+ * Picks the most recent year found in recognizable date patterns.
+ */
+function inferDefaultYearFromText(text: string): number | undefined {
+  const yearCandidates = new Set<number>();
+
+  // DD/MM/YYYY, DD-MM-YYYY, DD/MM/YY, DD-MM-YY
+  const dmyPattern = /\b\d{1,2}[/-]\d{1,2}[/-](\d{2,4})\b/g;
+  let match: RegExpExecArray | null;
+  while ((match = dmyPattern.exec(text)) !== null) {
+    const year = coerceYear(match[1]);
+    if (year) yearCandidates.add(year);
+  }
+
+  // YYYY/MM/DD or YYYY-MM-DD
+  const ymdPattern = /\b(20\d{2}|19\d{2})[/-]\d{1,2}[/-]\d{1,2}\b/g;
+  while ((match = ymdPattern.exec(text)) !== null) {
+    const year = Number(match[1]);
+    yearCandidates.add(year);
+  }
+
+  // DD MMM YYYY (month name)
+  const monthNamePattern =
+    /\b\d{1,2}\s+(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|SEPT|OCT|NOV|DEC)\s+(20\d{2}|19\d{2})\b/gi;
+  while ((match = monthNamePattern.exec(text)) !== null) {
+    const year = Number(match[2]);
+    yearCandidates.add(year);
+  }
+
+  if (yearCandidates.size === 0) return undefined;
+  return Math.max(...yearCandidates);
+}
+
+/**
+ * Attaches transaction identifiers to rows.
+ *
+ * Row shape expected: [Date, Description, Amount, Balance?]
+ * Returns rows extended with Identifier as the last column.
+ */
+function appendIdentifiers(
+  rows: string[][],
+  options: { defaultYear?: number; balanceFallback?: string }
+): string[][] {
+  const effectiveDefaultYear =
+    options.defaultYear ?? new Date().getFullYear();
+  return rows.map((row) => {
+    const [date, description, amount, balanceRaw] = row;
+    const resolvedBalance =
+      (balanceRaw && balanceRaw.trim()) ||
+      options.balanceFallback ||
+      amount ||
+      "0.00";
+
+    const identifier = generateTransactionIdentifier({
+      date,
+      amount,
+      balance: resolvedBalance,
+      description,
+      defaultYear: effectiveDefaultYear,
+    });
+
+    // Ensure the balance column is present for downstream consumers
+    const normalizedBalance =
+      balanceRaw && balanceRaw.trim() ? balanceRaw : resolvedBalance;
+
+    return [date, description, amount, normalizedBalance, identifier];
+  });
+}
+
+function coerceYear(yearStr: string): number | null {
+  if (/^\d{4}$/.test(yearStr)) return Number(yearStr);
+  if (/^\d{2}$/.test(yearStr)) return 2000 + Number(yearStr);
+  return null;
 }

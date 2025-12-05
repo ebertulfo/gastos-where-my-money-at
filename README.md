@@ -1,36 +1,96 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Gastos - Where My Money At? 💸
 
-## Getting Started
+A privacy-first expense tracking tool that helps you consolidate bank and credit card statements to understand where your money goes.
 
-First, run the development server:
+## 🔒 Privacy First
+
+**All transaction parsing happens entirely in your browser.** Your financial statements never leave your device - no data is uploaded to any server. This is the core principle of this application.
+
+## ✨ Features
+
+- **PDF Statement Parsing**: Upload bank statements and credit card statements in PDF format
+- **Automatic Transaction Extraction**: Extracts dates, descriptions, and amounts from your statements
+- **Smart Withdrawal Detection**: Uses balance comparison to accurately identify expenses vs income
+- **Multi-Account Support**: Handles PDFs with multiple account sections
+- **Duplicate Detection**: Each transaction gets a unique identifier for deduplication across imports
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+- Node.js 18+ 
+- npm, yarn, pnpm, or bun
+
+### Installation
 
 ```bash
+# Clone the repository
+git clone https://github.com/ebertulfo/gastos-where-my-money-at.git
+cd gastos-where-my-money-at
+
+# Install dependencies
+npm install
+
+# Run the development server
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) with your browser.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Usage
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. **Upload a Statement**: Drag and drop or click to upload a PDF bank/credit card statement
+2. **Review Extracted Transactions**: The app will parse and display all detected transactions
+3. **Export or Organize**: Use the extracted data to track your expenses
 
-## Learn More
+## 🗺️ Roadmap
 
-To learn more about Next.js, take a look at the following resources:
+### Phase 1: Statement Parsing ✅
+- [x] PDF text extraction
+- [x] Bank statement transaction parsing
+- [x] Credit card statement parsing
+- [x] Multi-line transaction handling
+- [x] Balance-based withdrawal/deposit detection
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Phase 2: Transaction Management (Planned)
+- [ ] Transaction identifier generation for deduplication
+- [ ] Local storage persistence (IndexedDB)
+- [ ] Import/export functionality
+- [ ] Duplicate detection on import
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### Phase 3: Organization & Insights (Planned)
+- [ ] Transaction categorization
+- [ ] Custom category creation
+- [ ] Monthly/yearly spending summaries
+- [ ] Spending trends and charts
+- [ ] Search and filter transactions
 
-## Deploy on Vercel
+### Phase 4: Multi-Statement Consolidation (Planned)
+- [ ] Merge transactions from multiple statements
+- [ ] Cross-account expense tracking
+- [ ] Statement period management
+- [ ] Account management
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## 🛠️ Tech Stack
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- **Framework**: [Next.js 15](https://nextjs.org/) with App Router
+- **Language**: TypeScript
+- **PDF Parsing**: pdf-parse (runs in Node.js runtime, but data stays local)
+- **Styling**: Tailwind CSS
+
+## 📄 Supported Statement Formats
+
+Currently tested with:
+- DBS/POSB Bank Statements (Singapore)
+- DBS Credit Card Statements (Singapore)
+
+More formats will be added based on user feedback.
+
+## 📝 License
+
+This project is open source and available under the [MIT License](LICENSE).
+
+---
+
+**Remember**: Your financial data is yours. This tool is designed to help you understand your spending without compromising your privacy.
+
