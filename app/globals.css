@@ -1,26 +1,180 @@
 @import "tailwindcss";
 
+/* Gastos Design System - Dark Mode First */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Light theme (secondary) */
+  --background: 249 250 251;
+  --foreground: 2 6 23;
+  --card: 255 255 255;
+  --card-foreground: 2 6 23;
+  --popover: 255 255 255;
+  --popover-foreground: 2 6 23;
+  --primary: 5 150 105;
+  --primary-foreground: 236 253 245;
+  --secondary: 229 231 235;
+  --secondary-foreground: 17 24 39;
+  --muted: 229 231 235;
+  --muted-foreground: 107 114 128;
+  --accent: 16 185 129;
+  --accent-foreground: 2 44 34;
+  --destructive: 220 38 38;
+  --destructive-foreground: 254 242 242;
+  --border: 209 213 219;
+  --input: 255 255 255;
+  --ring: 5 150 105;
+  --subtle-bg: 255 255 255;
+  --elevated-bg: 255 255 255;
+  --success: 22 163 74;
+  --warning: 217 119 6;
+  --info: 2 132 199;
+  --radius: 0.5rem;
+}
+
+.dark {
+  /* Dark theme (primary) */
+  --background: 5 5 9;
+  --foreground: 249 250 251;
+  --card: 5 5 9;
+  --card-foreground: 249 250 251;
+  --popover: 15 16 24;
+  --popover-foreground: 249 250 251;
+  --primary: 16 185 129;
+  --primary-foreground: 2 44 34;
+  --secondary: 17 24 39;
+  --secondary-foreground: 229 231 235;
+  --muted: 17 24 39;
+  --muted-foreground: 156 163 175;
+  --accent: 52 211 153;
+  --accent-foreground: 2 44 34;
+  --destructive: 239 68 68;
+  --destructive-foreground: 254 242 242;
+  --border: 31 41 51;
+  --input: 17 24 39;
+  --ring: 16 185 129;
+  --subtle-bg: 9 9 18;
+  --elevated-bg: 15 16 24;
+  --success: 34 197 94;
+  --warning: 251 191 36;
+  --info: 56 189 248;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-background: rgb(var(--background));
+  --color-foreground: rgb(var(--foreground));
+  --color-card: rgb(var(--card));
+  --color-card-foreground: rgb(var(--card-foreground));
+  --color-popover: rgb(var(--popover));
+  --color-popover-foreground: rgb(var(--popover-foreground));
+  --color-primary: rgb(var(--primary));
+  --color-primary-foreground: rgb(var(--primary-foreground));
+  --color-secondary: rgb(var(--secondary));
+  --color-secondary-foreground: rgb(var(--secondary-foreground));
+  --color-muted: rgb(var(--muted));
+  --color-muted-foreground: rgb(var(--muted-foreground));
+  --color-accent: rgb(var(--accent));
+  --color-accent-foreground: rgb(var(--accent-foreground));
+  --color-destructive: rgb(var(--destructive));
+  --color-destructive-foreground: rgb(var(--destructive-foreground));
+  --color-border: rgb(var(--border));
+  --color-input: rgb(var(--input));
+  --color-ring: rgb(var(--ring));
+  --color-subtle-bg: rgb(var(--subtle-bg));
+  --color-elevated-bg: rgb(var(--elevated-bg));
+  --color-success: rgb(var(--success));
+  --color-warning: rgb(var(--warning));
+  --color-info: rgb(var(--info));
+  --font-sans: var(--font-inter);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/* Container centering */
+.container {
+  width: 100%;
+  max-width: 1280px;
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+@media (min-width: 640px) {
+  .container {
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
   }
 }
 
+@media (min-width: 1024px) {
+  .container {
+    padding-left: 2rem;
+    padding-right: 2rem;
+  }
+}
+
+* {
+  border-color: rgb(var(--border));
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: rgb(var(--background));
+  color: rgb(var(--foreground));
+  font-family: var(--font-sans), system-ui, sans-serif;
+  font-feature-settings: "rlig" 1, "calt" 1;
+}
+
+/* Smooth transitions for theme switching */
+* {
+  transition-property: background-color, border-color, color;
+  transition-duration: 150ms;
+  transition-timing-function: ease-in-out;
+}
+
+/* Animation utilities */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-subtle {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.7;
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out;
+}
+
+.animate-slide-up {
+  animation: slide-up 0.3s ease-out;
+}
+
+.animate-pulse-subtle {
+  animation: pulse-subtle 2s ease-in-out infinite;
 }

@@ -145,3 +145,62 @@ See `docs/ROADMAP.md` for milestones. This spec is the M1 “Statement Ingestion
 - How do we capture account identity (user-entered vs parsed) to scope dedup when multiple accounts exist?
 - Should we block ingestion if the statement period overlaps with an already-uploaded statement from the same account, or just rely on identifiers?
 - Do we need soft-delete/void semantics for transactions later, and how does that interact with duplicates history?
+
+---
+
+## Implementation Notes
+
+### Database: Supabase (Postgres)
+
+The data model is implemented using Supabase with the following:
+
+**Migration file:** `supabase/migrations/20251205000001_create_statements_and_transactions.sql`
+
+**Key implementation details:**
+- All IDs are UUIDs using `uuid-ossp` extension
+- Enums defined for: `statement_type`, `statement_status`, `import_resolution`, `transaction_status`
+- Automatic `updated_at` trigger on all tables
+- Cascade deletes: deleting a statement removes associated transactions and imports
+- Default timezone: `Asia/Manila` (Philippines)
+- Default currency: `PHP`
+
+**TypeScript types:** `lib/supabase/database.types.ts`
+- Manually maintained for now; can be auto-generated via `npx supabase gen types typescript`
+
+**Client setup:** `lib/supabase/client.ts`
+- `supabase` - client-side instance (anon key)
+- `createServerClient()` - server-side instance (service role key for admin ops)
+
+### Environment Variables
+
+Required in `.env.local` (see `.env.example`):
+```
+NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<from supabase start>
+SUPABASE_SERVICE_ROLE_KEY=<from supabase start>
+```
+
+### Local Development
+
+```bash
+# Start local Supabase (runs Postgres, Auth, Storage, etc.)
+npx supabase start
+
+# Apply migrations
+npx supabase db reset
+
+# View local dashboard
+# http://127.0.0.1:54323
+
+# Stop when done
+npx supabase stop
+```
+
+### Future: Row Level Security (RLS)
+
+RLS is enabled from day one in the migration:
+- **`statements`**: users can only CRUD their own (`uploaded_by = auth.uid()`)
+- **`transactions`**: users can only CRUD their own (`user_id = auth.uid()`)
+- **`transaction_imports`**: access controlled via statement ownership (subquery check)
+
+This ensures data isolation even in M1 single-household mode, and is ready for multi-user expansion.

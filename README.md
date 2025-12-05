@@ -20,6 +20,7 @@ A privacy-first expense tracking tool that helps you consolidate bank and credit
 
 - Node.js 18+ 
 - npm, yarn, pnpm, or bun
+- Docker Desktop (for local Supabase)
 
 ### Installation
 
@@ -31,11 +32,36 @@ cd gastos-where-my-money-at
 # Install dependencies
 npm install
 
+# Copy environment variables
+cp .env.example .env.local
+
+# Start local Supabase (requires Docker)
+npx supabase start
+
+# The command above will output your local API URL and keys
+# Update .env.local with the values shown
+
 # Run the development server
 npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) with your browser.
+
+### Local Supabase Commands
+
+```bash
+# Start Supabase services
+npx supabase start
+
+# Reset database (apply all migrations fresh)
+npx supabase db reset
+
+# View local Supabase dashboard
+# http://127.0.0.1:54323
+
+# Stop Supabase when done
+npx supabase stop
+```
 
 ### Usage
 
@@ -75,6 +101,7 @@ Open [http://localhost:3000](http://localhost:3000) with your browser.
 
 - **Framework**: [Next.js 15](https://nextjs.org/) with App Router
 - **Language**: TypeScript
+- **Database**: [Supabase](https://supabase.com/) (Postgres)
 - **PDF Parsing**: pdf-parse (runs in Node.js runtime, but data stays local)
 - **Styling**: Tailwind CSS
 
