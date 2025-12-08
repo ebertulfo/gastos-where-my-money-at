@@ -52,7 +52,10 @@ export const mockTransactions: Transaction[] = [
         monthBucket: '2025-11',
         transactionIdentifier: 'txn-id-001',
         statementId: 'stmt-001',
-        createdAt: '2025-11-30T12:00:00Z',
+        isExcluded: true,
+        exclusionReason: 'Credit Card Payment',
+        tags: [{ id: 'tag-1', name: 'Utilities', color: '#63cf7f' }],
+        createdAt: '2025-11-29T10:00:00Z',
     },
     {
         id: 'txn-002',
@@ -64,7 +67,7 @@ export const mockTransactions: Transaction[] = [
         monthBucket: '2025-11',
         transactionIdentifier: 'txn-id-002',
         statementId: 'stmt-002',
-        createdAt: '2025-11-29T19:45:00Z',
+        createdAt: '2025-11-29T19:45:00Z', isExcluded: false, tags: [],
     },
     {
         id: 'txn-003',
@@ -76,7 +79,7 @@ export const mockTransactions: Transaction[] = [
         monthBucket: '2025-11',
         transactionIdentifier: 'txn-id-003',
         statementId: 'stmt-001',
-        createdAt: '2025-11-29T08:30:00Z',
+        createdAt: '2025-11-29T08:30:00Z', isExcluded: false, tags: [],
     },
     {
         id: 'txn-004',
@@ -88,7 +91,7 @@ export const mockTransactions: Transaction[] = [
         monthBucket: '2025-11',
         transactionIdentifier: 'txn-id-004',
         statementId: 'stmt-001',
-        createdAt: '2025-11-28T14:20:00Z',
+        createdAt: '2025-11-28T14:20:00Z', isExcluded: false, tags: [],
     },
     {
         id: 'txn-005',
@@ -100,7 +103,7 @@ export const mockTransactions: Transaction[] = [
         monthBucket: '2025-11',
         transactionIdentifier: 'txn-id-005',
         statementId: 'stmt-002',
-        createdAt: '2025-11-27T10:00:00Z',
+        createdAt: '2025-11-27T10:00:00Z', isExcluded: false, tags: [],
     },
     {
         id: 'txn-006',
@@ -112,7 +115,7 @@ export const mockTransactions: Transaction[] = [
         monthBucket: '2025-11',
         transactionIdentifier: 'txn-id-006',
         statementId: 'stmt-001',
-        createdAt: '2025-11-26T18:15:00Z',
+        createdAt: '2025-11-26T18:15:00Z', isExcluded: false, tags: [],
     },
     {
         id: 'txn-007',
@@ -124,7 +127,7 @@ export const mockTransactions: Transaction[] = [
         monthBucket: '2025-11',
         transactionIdentifier: 'txn-id-007',
         statementId: 'stmt-001',
-        createdAt: '2025-11-25T09:30:00Z',
+        createdAt: '2025-11-25T09:30:00Z', isExcluded: false, tags: [],
     },
     {
         id: 'txn-008',
@@ -136,7 +139,7 @@ export const mockTransactions: Transaction[] = [
         monthBucket: '2025-11',
         transactionIdentifier: 'txn-id-008',
         statementId: 'stmt-001',
-        createdAt: '2025-11-24T00:00:00Z',
+        createdAt: '2025-11-24T00:00:00Z', isExcluded: false, tags: [],
     },
     {
         id: 'txn-009',
@@ -148,7 +151,7 @@ export const mockTransactions: Transaction[] = [
         monthBucket: '2025-11',
         transactionIdentifier: 'txn-id-009',
         statementId: 'stmt-001',
-        createdAt: '2025-11-23T12:45:00Z',
+        createdAt: '2025-11-23T12:45:00Z', isExcluded: false, tags: [],
     },
     {
         id: 'txn-010',
@@ -160,7 +163,7 @@ export const mockTransactions: Transaction[] = [
         monthBucket: '2025-11',
         transactionIdentifier: 'txn-id-010',
         statementId: 'stmt-001',
-        createdAt: '2025-11-22T00:00:00Z',
+        createdAt: '2025-11-22T00:00:00Z', isExcluded: false, tags: [],
     },
 ]
 
@@ -177,7 +180,7 @@ export function generateMockImportReview(statementId: string): ImportReview {
             monthBucket: '2025-12',
             transactionIdentifier: 'new-txn-id-001',
             statementId,
-            createdAt: new Date().toISOString(),
+            createdAt: new Date().toISOString(), isExcluded: false, tags: [],
         },
         {
             id: 'new-002',
@@ -189,7 +192,7 @@ export function generateMockImportReview(statementId: string): ImportReview {
             monthBucket: '2025-12',
             transactionIdentifier: 'new-txn-id-002',
             statementId,
-            createdAt: new Date().toISOString(),
+            createdAt: new Date().toISOString(), isExcluded: false, tags: [],
         },
         {
             id: 'new-003',
@@ -201,7 +204,7 @@ export function generateMockImportReview(statementId: string): ImportReview {
             monthBucket: '2025-12',
             transactionIdentifier: 'new-txn-id-003',
             statementId,
-            createdAt: new Date().toISOString(),
+            createdAt: new Date().toISOString(), isExcluded: false, tags: [],
         },
         {
             id: 'new-004',
@@ -213,7 +216,7 @@ export function generateMockImportReview(statementId: string): ImportReview {
             monthBucket: '2025-12',
             transactionIdentifier: 'new-txn-id-004',
             statementId,
-            createdAt: new Date().toISOString(),
+            createdAt: new Date().toISOString(), isExcluded: false, tags: [],
         },
         {
             id: 'new-005',
@@ -225,7 +228,7 @@ export function generateMockImportReview(statementId: string): ImportReview {
             monthBucket: '2025-12',
             transactionIdentifier: 'new-txn-id-005',
             statementId,
-            createdAt: new Date().toISOString(),
+            createdAt: new Date().toISOString(), isExcluded: false, tags: [],
         },
     ]
 
@@ -242,7 +245,7 @@ export function generateMockImportReview(statementId: string): ImportReview {
                 monthBucket: '2025-11',
                 transactionIdentifier: 'txn-id-001', // Same identifier
                 statementId,
-                createdAt: new Date().toISOString(),
+                createdAt: new Date().toISOString(), isExcluded: false, tags: [],
             },
             importId: 'import-dup-001',
         },
@@ -258,7 +261,7 @@ export function generateMockImportReview(statementId: string): ImportReview {
                 monthBucket: '2025-11',
                 transactionIdentifier: 'txn-id-003', // Same identifier
                 statementId,
-                createdAt: new Date().toISOString(),
+                createdAt: new Date().toISOString(), isExcluded: false, tags: [],
             },
             importId: 'import-dup-002',
         },

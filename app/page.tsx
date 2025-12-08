@@ -1,7 +1,9 @@
 'use client'
 
+import { getSettings } from '@/app/actions/settings'
 import { getRecentStatements } from '@/app/actions/statements'
 import { NavHeader } from '@/components/nav-header'
+import { OnboardingWizard } from '@/components/onboarding-wizard'
 import { StatementCard } from '@/components/statement-card'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
@@ -18,6 +20,7 @@ export default function HomePage() {
   const [uploadedFileName, setUploadedFileName] = useState<string>('')
   const [recentImports, setRecentImports] = useState<Statement[]>([])
   const [isLoadingHistory, setIsLoadingHistory] = useState(true)
+  const [showOnboarding, setShowOnboarding] = useState(false)
 
   const handleFileSelect = useCallback(async (files: File[]) => {
     if (files.length > 0) {
@@ -28,17 +31,26 @@ export default function HomePage() {
   }, [upload])
   
   useEffect(() => {
-      async function fetchHistory() {
+      async function init() {
           try {
-              const data = await getRecentStatements()
+              // Parallel fetch history and settings
+              const [data, settings] = await Promise.all([
+                  getRecentStatements(),
+                  getSettings()
+              ])
               setRecentImports(data)
+              
+              // If no settings, trigger onboarding
+              if (!settings) {
+                  setShowOnboarding(true)
+              }
           } catch (e) {
-              console.error("Failed to load history", e)
+              console.error("Failed to load data", e)
           } finally {
               setIsLoadingHistory(false)
           }
       }
-      fetchHistory()
+      init()
   }, [])
 
   const showParsingProgress = isUploading || uploads.length > 0
@@ -46,9 +58,10 @@ export default function HomePage() {
   return (
     <div className="min-h-screen bg-background">
       <NavHeader />
+      <OnboardingWizard open={showOnboarding} />
 
       <main className="container py-8 md:py-12">
-        {/* Hero Section */}
+        {/* ... existing content ... */}
         <div className="text-center mb-10 animate-fade-in">
           <h1 className="text-4xl md:text-5xl font-bold tracking-tight mb-4">
             Unfuck your finances.

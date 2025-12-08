@@ -112,15 +112,12 @@ export async function ingestStatement({
       description: row.description,
     });
     
-    // Derive month bucket YYYY-MM
+    // Derive month bucket YYYY-MM from valid standardized date
     let monthBucket = '0000-00';
     try {
-        const d = new Date(dateForId);
-        if (!isNaN(d.getTime())) {
-            const y = d.getFullYear();
-            const m = String(d.getMonth() + 1).padStart(2, '0');
-            monthBucket = `${y}-${m}`;
-        }
+        // We re-use the normalization logic to ensure the bucket matches exactly what goes into the ID and DB
+        const yyyyMmDd = normalizeDateToYyyyMmDd(dateForId);
+        monthBucket = `${yyyyMmDd.substring(0, 4)}-${yyyyMmDd.substring(4, 6)}`;
     } catch (e) {
         console.warn("Invalid date for bucket", row.date);
     }

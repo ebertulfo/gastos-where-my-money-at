@@ -3,18 +3,21 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import type { Transaction, MonthSummary } from '@/lib/types/transaction'
+import type { Tag } from '@/lib/supabase/database.types'
 import { getTransactions, getMonthSummary, getAvailableMonthsList, getStatementsForMonth } from '@/app/actions/transactions'
+import { getTags } from '@/app/actions/tags'
 
 interface UseTransactionsReturn {
     transactions: Transaction[]
     summary: MonthSummary | null
     availableMonths: string[]
     availableStatements: { id: string; label: string }[]
+    availableTags: Tag[]
     selectedMonth: string | null
     setSelectedMonth: (month: string) => void
     isLoading: boolean
     error: string | null
-    refetch: () => void
+    refetch: (silent?: boolean) => void
 }
 
 export function useTransactions(initialMonth?: string): UseTransactionsReturn {
@@ -22,6 +25,7 @@ export function useTransactions(initialMonth?: string): UseTransactionsReturn {
     const [summary, setSummary] = useState<MonthSummary | null>(null)
     const [availableMonths, setAvailableMonths] = useState<string[]>([])
     const [availableStatements, setAvailableStatements] = useState<{ id: string; label: string }[]>([])
+    const [availableTags, setAvailableTags] = useState<Tag[]>([])
     const [selectedMonth, setSelectedMonth] = useState<string | null>(initialMonth || null)
     const [isLoading, setIsLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
@@ -29,12 +33,16 @@ export function useTransactions(initialMonth?: string): UseTransactionsReturn {
     const searchParams = useSearchParams()
     const statementId = searchParams.get('statement')
 
-    // Fetch available months on mount
+    // Fetch available months and tags on mount
     useEffect(() => {
-        async function fetchMonths() {
+        async function init() {
             try {
-                const months = await getAvailableMonthsList()
+                const [months, tags] = await Promise.all([
+                    getAvailableMonthsList(),
+                    getTags()
+                ])
                 setAvailableMonths(months)
+                setAvailableTags(tags)
 
                 // Auto-select first month if none selected and not viewing specific statement
                 if (!selectedMonth && months.length > 0 && !statementId) {
@@ -44,13 +52,13 @@ export function useTransactions(initialMonth?: string): UseTransactionsReturn {
                     setIsLoading(false)
                 }
             } catch (err) {
-                console.error('Failed to fetch months:', err)
-                setError('Failed to fetch available months')
+                console.error('Failed to init:', err)
+                setError('Failed to fetch initial data')
                 setIsLoading(false)
             }
         }
 
-        fetchMonths()
+        init()
     }, [selectedMonth, statementId])
 
     // Load available statements when month changes
@@ -68,24 +76,26 @@ export function useTransactions(initialMonth?: string): UseTransactionsReturn {
     }, [selectedMonth])
 
     // Fetch transactions when month changes or statementId changes
-    const fetchTransactions = useCallback(async () => {
+    const fetchTransactions = useCallback(async (silent = false) => {
         if (!selectedMonth && !statementId) return
 
-        setIsLoading(true)
+        if (!silent) setIsLoading(true)
         setError(null)
 
         try {
-            const [txns, monthSummary] = await Promise.all([
+            const [txns, monthSummary, tags] = await Promise.all([
                 getTransactions(selectedMonth, statementId || undefined),
                 getMonthSummary(selectedMonth, statementId || undefined),
+                getTags() // Always refresh tags to stay in sync with deletions
             ])
 
             setTransactions(txns)
             setSummary(monthSummary)
+            setAvailableTags(tags) 
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to load transactions')
         } finally {
-            setIsLoading(false)
+            if (!silent) setIsLoading(false)
         }
     }, [selectedMonth, statementId])
 
@@ -93,8 +103,8 @@ export function useTransactions(initialMonth?: string): UseTransactionsReturn {
         fetchTransactions()
     }, [fetchTransactions])
 
-    const refetch = useCallback(() => {
-        fetchTransactions()
+    const refetch = useCallback((silent = false) => {
+        fetchTransactions(silent)
     }, [fetchTransactions])
 
     return {
@@ -102,6 +112,7 @@ export function useTransactions(initialMonth?: string): UseTransactionsReturn {
         summary,
         availableMonths,
         availableStatements,
+        availableTags,
         selectedMonth,
         setSelectedMonth,
         isLoading,

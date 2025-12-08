@@ -8,6 +8,9 @@ export interface Transaction {
     monthBucket: string // YYYY-MM format
     transactionIdentifier: string
     statementId: string
+    isExcluded: boolean
+    exclusionReason?: string
+    tags: { id: string; name: string; color: string | null }[]
     createdAt: string
 }
 

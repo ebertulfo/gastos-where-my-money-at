@@ -1,6 +1,7 @@
 'use client'
 
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { Suspense } from 'react'
 
 import { NavHeader } from '@/components/nav-header'
 import { TransactionTable } from '@/components/transaction-table'
@@ -23,7 +24,7 @@ function formatMonthLabel(month: string): string {
     return date.toLocaleDateString('en-SG', { month: 'long', year: 'numeric' })
 }
 
-export default function TransactionsPage() {
+function TransactionsContent() {
     const router = useRouter()
     const pathname = usePathname()
     const searchParams = useSearchParams()
@@ -33,10 +34,12 @@ export default function TransactionsPage() {
         summary,
         availableMonths,
         availableStatements,
+        availableTags,
         selectedMonth,
         setSelectedMonth,
         isLoading,
         error,
+        refetch,
     } = useTransactions()
 
     const currentMonthIndex = selectedMonth ? availableMonths.indexOf(selectedMonth) : -1
@@ -146,9 +149,11 @@ export default function TransactionsPage() {
                 ) : (
                     <TransactionTable
                         transactions={transactions}
+                        availableTags={availableTags}
                         showSource={true}
                         className="animate-slide-up"
                         emptyMessage="No transactions for this month. Upload a statement to get started."
+                        onTransactionUpdate={refetch}
                     />
                 )}
 
@@ -173,5 +178,22 @@ export default function TransactionsPage() {
                 </div>
             </main>
         </div>
+    )
+}
+
+export default function TransactionsPage() {
+    return (
+        <Suspense fallback={
+            <div className="min-h-screen bg-background">
+                 <NavHeader />
+                 <main className="container py-8">
+                    <div className="flex items-center justify-center py-20">
+                        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                    </div>
+                 </main>
+            </div>
+        }>
+            <TransactionsContent />
+        </Suspense>
     )
 }

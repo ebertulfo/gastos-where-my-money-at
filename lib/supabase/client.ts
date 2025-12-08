@@ -1,3 +1,4 @@
+import { createBrowserClient } from '@supabase/ssr'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from './database.types'
 
@@ -13,7 +14,7 @@ const key = supabaseAnonKey || 'placeholder-key'
 
 
 // Client-side Supabase client (uses anon key)
-export const supabase = createClient<Database>(url, key)
+export const supabase = createBrowserClient<Database>(url, key)
 
 // Server-side Supabase client factory (for API routes)
 export function createServerClient(): SupabaseClient<Database> {

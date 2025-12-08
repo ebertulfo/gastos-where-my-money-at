@@ -79,6 +79,8 @@ export type Database = {
           statement_page: number | null
           line_number: number | null
           status: 'active' | 'voided'
+          is_excluded: boolean
+          exclusion_reason: string | null
           created_at: string
           updated_at: string
         }
@@ -95,6 +97,8 @@ export type Database = {
           statement_page?: number | null
           line_number?: number | null
           status?: 'active' | 'voided'
+          is_excluded?: boolean
+          exclusion_reason?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -111,6 +115,8 @@ export type Database = {
           statement_page?: number | null
           line_number?: number | null
           status?: 'active' | 'voided'
+          is_excluded?: boolean
+          exclusion_reason?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -168,6 +174,49 @@ export type Database = {
           updated_at?: string
         }
       }
+      tags: {
+        Row: {
+          id: string
+          user_id: string
+          name: string
+          parent_id: string | null
+          color: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          name: string
+          parent_id?: string | null
+          color?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          name?: string
+          parent_id?: string | null
+          color?: string | null
+          created_at?: string
+        }
+      }
+      transaction_tags: {
+        Row: {
+          transaction_id: string
+          tag_id: string
+          created_at: string
+        }
+        Insert: {
+          transaction_id: string
+          tag_id: string
+          created_at?: string
+        }
+        Update: {
+          transaction_id?: string
+          tag_id?: string
+          created_at?: string
+        }
+      }
     }
     Views: {
       [_ in never]: never
@@ -201,3 +250,10 @@ export type StatementType = Database['public']['Enums']['statement_type']
 export type StatementStatus = Database['public']['Enums']['statement_status']
 export type ImportResolution = Database['public']['Enums']['import_resolution']
 export type TransactionStatus = Database['public']['Enums']['transaction_status']
+
+export type Tag = Database['public']['Tables']['tags']['Row']
+export type TagInsert = Database['public']['Tables']['tags']['Insert']
+export type TagUpdate = Database['public']['Tables']['tags']['Update']
+
+export type TransactionTag = Database['public']['Tables']['transaction_tags']['Row']
+export type TransactionTagInsert = Database['public']['Tables']['transaction_tags']['Insert']

@@ -1,5 +1,6 @@
 'use client'
 
+import { getTags } from '@/app/actions/tags'
 import { DuplicateComparison } from '@/components/duplicate-comparison'
 import { NavHeader } from '@/components/nav-header'
 import { TransactionTable } from '@/components/transaction-table'
@@ -14,11 +15,12 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { useStatementReview } from '@/lib/hooks/use-statement-review'
+import { Tag } from '@/lib/supabase/database.types'
 import { formatDate } from '@/lib/utils'
 import { AlertTriangle, ArrowLeft, Check, Loader2 } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { use } from 'react'
+import { use, useEffect, useState } from 'react'
 
 interface ReviewPageProps {
     params: Promise<{ statementId: string }>
@@ -27,6 +29,12 @@ interface ReviewPageProps {
 export default function ReviewPage({ params }: ReviewPageProps) {
     const { statementId } = use(params)
     const router = useRouter()
+    const [availableTags, setAvailableTags] = useState<Tag[]>([])
+
+    useEffect(() => {
+        getTags().then(setAvailableTags).catch((err) => console.error('Failed to fetch tags', err))
+    }, [])
+
     const {
         review,
         isLoading,
@@ -157,8 +165,10 @@ export default function ReviewPage({ params }: ReviewPageProps) {
                     <CardContent>
                         <TransactionTable
                             transactions={newTransactions}
+                            availableTags={availableTags}
                             showSource={false}
                             emptyMessage="No new transactions found."
+                            enableTagging={false}
                         />
                     </CardContent>
                 </Card>

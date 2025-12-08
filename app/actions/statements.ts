@@ -1,6 +1,6 @@
 'use server'
 
-import { createServerClient } from '@/lib/supabase/client'
+import { createClient } from '@/lib/supabase/server'
 import { ImportReview, DuplicatePair, ImportDecisions, Transaction, Statement as UIStatement } from '@/lib/types/transaction'
 import { Database } from '@/lib/supabase/database.types'
 
@@ -19,6 +19,9 @@ function mapDBTransaction(t: DBTransaction): Transaction {
     monthBucket: t.month_bucket,
     transactionIdentifier: t.transaction_identifier,
     statementId: t.statement_id,
+    isExcluded: t.is_excluded || false,
+    exclusionReason: t.exclusion_reason || undefined,
+    tags: [],
     createdAt: t.created_at,
   }
 }
@@ -34,12 +37,15 @@ function mapImportToTransaction(t: DBImport, currency: string): Transaction {
     monthBucket: t.month_bucket,
     transactionIdentifier: t.transaction_identifier,
     statementId: t.statement_id,
+    isExcluded: false,
+    exclusionReason: undefined,
+    tags: [],
     createdAt: t.created_at,
   }
 }
 
 export async function getReviewData(statementId: string): Promise<ImportReview> {
-  const supabase = createServerClient()
+  const supabase = await createClient()
 
   // 1. Fetch statement
   const { data: statementData, error: statementError } = await (supabase as any)
@@ -121,7 +127,7 @@ export async function getReviewData(statementId: string): Promise<ImportReview> 
 }
 
 export async function confirmStatementImport(statementId: string, decisions: ImportDecisions['decisions']): Promise<{ success: boolean; error?: string }> {
-  const supabase = createServerClient()
+  const supabase = await createClient()
 
   // 1. Fetch all pending imports for this statement
   const { data: importsData, error: fetchError } = await (supabase as any)
@@ -244,7 +250,7 @@ export async function confirmStatementImport(statementId: string, decisions: Imp
 }
 
 export async function getRecentStatements(): Promise<UIStatement[]> {
-  const supabase = createServerClient()
+  const supabase = await createClient()
   
   const { data: statementsData, error } = await (supabase as any)
     .from('statements')
@@ -281,7 +287,7 @@ export async function getRecentStatements(): Promise<UIStatement[]> {
 }
 
 export async function deleteStatement(statementId: string): Promise<{ success: boolean; error?: string }> {
-  const supabase = createServerClient()
+  const supabase = await createClient()
   
   const { error } = await (supabase as any)
     .from('statements')

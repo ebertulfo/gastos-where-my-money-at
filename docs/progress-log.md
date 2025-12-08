@@ -71,7 +71,23 @@ We finalized the M1 milestone by connecting the frontend to real database data, 
     - Standardized all Specification docs (`0`, `1`, `2`, `3`) with a consistent "Changelog" format.
     - Created `docs/specs/3-categorization-and-onboarding.md` detailing the plan for the next phase.
 
-### Next Steps (M2 / Next Session)
-1. **Schema Update**: Create `categories` table and add `is_payment` flag to transactions.
-2. **UI Implementation**: Build the "Manage Categories" view and Onboarding Modal.
-3. **Logic Update**: Update backend to exclude payments from total spend.
+## 2025-12-08: Transaction Exclusion & Tagging Improvements (Session 4)
+
+**Current Status**: M1.5 — Refinements
+
+We addressed user feedback on the exclusion logic, generalizing "Payments" to a broader "Excluded" status to handle duplicates, internal transfers, and payments uniformly. We also significantly improved the Tagging UI stability.
+
+### Recent Accomplishments
+- **Transaction Exclusion**:
+    - **Database Migration**: Renamed `is_payment` -> `is_excluded` and added `exclusion_reason`.
+    - **UI**: Implemented an "Eye" toggle for exclusion.
+    - **UX**: Added a popover to capture optional reasons (e.g., "Duplicate") when excluding.
+    - **Logic**: Updated "Total Spend" to respect the `is_excluded` flag.
+- **UI/UX Polish**:
+    - **Tagging**: Moved to an explicit loading state (locking the row) instead of Optimistic UI to prevent data sync issues.
+    - **Performance**: Implemented "Silent Refetching" to update totals without triggering global loading spinners.
+
+### Next Steps (From Wishlist)
+1. **Upload Multiple Files**: Enhancing the ingestion flow to handle batch uploads.
+2. **Statement Management**: Create a dedicated view to list, manage, and delete statements.
+3. **Categories**: Proceed with the categorization implementation (M2).

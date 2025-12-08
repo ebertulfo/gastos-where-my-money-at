@@ -1,6 +1,6 @@
 'use server'
 
-import { createServerClient } from '@/lib/supabase/client'
+import { createClient } from '@/lib/supabase/server'
 import { Transaction, MonthSummary } from '@/lib/types/transaction'
 import { Database } from '@/lib/supabase/database.types'
 
@@ -17,6 +17,14 @@ function mapDBTransaction(t: any): Transaction {
   if (!t.statements) {
       sourceLabel = 'Usage'
   }
+
+  // Map tags from the junction table structure
+  // The query returns transaction_tags(tags(...))
+  const tags = t.transaction_tags?.map((tt: any) => ({
+      id: tt.tags.id,
+      name: tt.tags.name,
+      color: tt.tags.color
+  })) || []
   
   return {
     id: t.id,
@@ -28,17 +36,26 @@ function mapDBTransaction(t: any): Transaction {
     monthBucket: t.month_bucket,
     transactionIdentifier: t.transaction_identifier,
     statementId: t.statement_id,
+    isExcluded: t.is_excluded || false,
+    exclusionReason: t.exclusion_reason,
+    tags: tags,
     createdAt: t.created_at,
   }
 }
 
 
 export async function getTransactions(month?: string | null, statementId?: string): Promise<Transaction[]> {
-  const supabase = createServerClient()
+  const supabase = await createClient()
   
   let query = (supabase as any)
     .from('transactions')
-    .select('*, statements(bank, period_start, source_file_name)')
+    .select(`
+        *,
+        statements (bank, period_start, source_file_name),
+        transaction_tags (
+            tags (id, name, color)
+        )
+    `)
     .eq('status', 'active')
     .order('date', { ascending: false })
 
@@ -61,7 +78,7 @@ export async function getTransactions(month?: string | null, statementId?: strin
 }
 
 export async function getAvailableMonthsList(): Promise<string[]> {
-  const supabase = createServerClient()
+  const supabase = await createClient()
   
   // Supabase/Postgrest doesn't support SELECT DISTINCT ON (col) cleanly via JS client for just a list of strings
   // But we can fetch distinct month_buckets.
@@ -81,11 +98,11 @@ export async function getAvailableMonthsList(): Promise<string[]> {
 }
 
 export async function getMonthSummary(month: string | null, statementId?: string): Promise<MonthSummary> {
-  const supabase = createServerClient()
+  const supabase = await createClient()
   
   let query = (supabase as any)
     .from('transactions')
-    .select('amount, statement_id')
+    .select('amount, statement_id, is_excluded')
     .eq('status', 'active')
 
   if (month) {
@@ -102,10 +119,10 @@ export async function getMonthSummary(month: string | null, statementId?: string
     throw new Error('Failed to fetch summary')
   }
 
-  const transactions = data as { amount: number; statement_id: string }[]
+  const transactions = data as { amount: number; statement_id: string; is_excluded: boolean }[]
   
   const totalSpent = transactions
-    .filter(t => t.amount > 0) // Assuming positive for expenses based on "Gastos" context and parsed data
+    .filter(t => t.amount > 0 && !t.is_excluded) // Exclude marked transactions and ensuring positive amounts
     .reduce((sum, t) => sum + t.amount, 0)
 
   const statementCount = new Set(transactions.map(t => t.statement_id)).size
@@ -119,8 +136,26 @@ export async function getMonthSummary(month: string | null, statementId?: string
   }
 }
 
+export async function updateTransactionExclusion(id: string, isExcluded: boolean, reason?: string) {
+  const supabase = await createClient()
+  
+  const { error } = await (supabase.from('transactions') as any)
+    .update({ 
+        is_excluded: isExcluded,
+        exclusion_reason: isExcluded ? reason : null 
+    })
+    .eq('id', id)
+    
+  if (error) {
+    console.error('Failed to update transaction exclusion:', error)
+    throw new Error('Failed to update transaction')
+  }
+  
+  return { success: true }
+}
+
 export async function getStatementsForMonth(month: string): Promise<{ id: string; label: string }[]> {
-  const supabase = createServerClient()
+  const supabase = await createClient()
   
   // Get distinct statement IDs for the month
   const { data, error } = await (supabase as any)

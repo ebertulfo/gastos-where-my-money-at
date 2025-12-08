@@ -41,22 +41,24 @@ Improve transaction management by identifying "Expenses" vs "Payments" (Credit C
 - **Categories Page**: Allow adding, editing, and deleting categories.
 - **Transaction Table**: Dropdown/Combobox in the row to assign a category.
 
-## 2. Credit Card Payments (Exclusions)
+## 2. Transaction Exclusion
 
 ### Requirement
-- Credit Card payments are transfers, not expenses.
-- They should be excluded from the "Total Spend" calculation.
-- we use a specific flag `is_payment` to identify these, distinct from the "Category".
+- Certain transactions (payments, duplicates, transfers) should not be counted in the "Total Spend".
+- Users need to be able to mark these explicitly.
+- We generalized `is_payment` to `is_excluded` to cover all these cases.
 
 ### Schema Changes
 
 #### Update Table: `transactions`
-- Add `is_payment` (boolean, default false)
+- Add `is_excluded` (boolean, default false) - *Renamed from `is_payment`*
+- Add `exclusion_reason` (text, nullable) - *Optional context*
 
 ### UI Implication
-- **Transaction Table**: Checkbox or Action to "Mark as Payment".
-- **Visuals**: Distinct styling (e.g., greyed out or separate icon) for payments.
-- **Dashboard**: "Total Spend" must filter out transactions where `is_payment = true`.
+- **Transaction Table**: "Eye/Eye-Off" toggle button.
+- **Reason Input**: When excluding, a popover prompts for an optional reason (e.g., "Duplicate").
+- **Visuals**: Excluded rows are dimmed and strikethrough.
+- **Dashboard**: "Total Spend" filters out transactions where `is_excluded = true`.
 
 ## 3. Onboarding Flow
 
@@ -78,11 +80,12 @@ Improve transaction management by identifying "Expenses" vs "Payments" (Credit C
 
 ## 4. Workflows & Interactions
 
-### Excluding a Payment
-1. User sees "DBS Payment" transaction.
-2. User clicks "Mark as Payment".
-3. UI updates `is_payment = true`.
-4. "Total Spend" recalculates (subtracting that amount).
+### Excluding a Transaction
+1. User sees a transaction (e.g., "DBS Payment" or "Transfer").
+2. User clicks "Exclude" (Eye-Off icon).
+3. (Optional) User enters a reason in the popover.
+4. UI updates `is_excluded = true`.
+5. "Total Spend" recalculates (subtracting that amount).
 
 ### Assigning a Category
 1. User sees "Grab Transport".

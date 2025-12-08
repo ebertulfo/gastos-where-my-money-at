@@ -1,8 +1,8 @@
-import { cn, formatDate } from '@/lib/utils'
-import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { FileText, Eye, RotateCcw } from 'lucide-react'
+import { Card, CardContent } from '@/components/ui/card'
+import { cn, formatDate } from '@/lib/utils'
+import { Eye, FileText } from 'lucide-react'
 import Link from 'next/link'
 
 export type StatementStatus = 'parsed' | 'reviewing' | 'ingested' | 'failed'
@@ -76,13 +76,74 @@ export function StatementCard({
                             </Link>
                         </Button>
                     )}
-                    {status === 'ingested' && (
-                        <Button variant="ghost" size="sm" disabled title="Re-import coming soon">
-                            <RotateCcw className="h-4 w-4" />
-                        </Button>
-                    )}
+                    
+                    <DeleteStatementDialog id={id} transactionCount={transactionCount} />
                 </div>
             </CardContent>
         </Card>
+    )
+}
+
+import { deleteStatement } from '@/app/actions/statements'
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+    AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
+import { Trash2 } from 'lucide-react'
+import { useState } from 'react'
+
+function DeleteStatementDialog({ id, transactionCount }: { id: string, transactionCount?: number }) {
+    const [open, setOpen] = useState(false)
+    const [isDeleting, setIsDeleting] = useState(false)
+
+    const handleDelete = async () => {
+        setIsDeleting(true)
+        try {
+            await deleteStatement(id)
+            setOpen(false)
+        } catch (error) {
+            console.error('Failed to delete statement', error)
+            setIsDeleting(false)
+        }
+    }
+
+    return (
+        <AlertDialog open={open} onOpenChange={setOpen}>
+            <AlertDialogTrigger asChild>
+                <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-destructive transition-colors">
+                    <Trash2 className="h-4 w-4" />
+                </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+                <AlertDialogHeader>
+                    <AlertDialogTitle>Delete Statement?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                        This will permanently delete this statement
+                        {transactionCount ? ` and its ${transactionCount} transactions` : ''}.
+                        This action cannot be undone.
+                    </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                    <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+                    <AlertDialogAction 
+                        onClick={(e) => {
+                            e.preventDefault()
+                            handleDelete()
+                        }}
+                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        disabled={isDeleting}
+                    >
+                        {isDeleting ? 'Deleting...' : 'Delete'}
+                    </AlertDialogAction>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
     )
 }
