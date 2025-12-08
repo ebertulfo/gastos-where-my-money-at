@@ -50,3 +50,28 @@ We successfully debugged the PDF ingestion pipeline and polished the review work
 1. **Recent Imports Status**: Update the dashboard/list to accurately reflect statement status (e.g. "Reviewing" vs "Confirmed"). currently, clicking an unconfirmed statement incorrectly shows a mock Transactions view.
 2. **Real Transaction Data**: Connect the Transactions page to the actual database (`transactions` table) instead of mock data.
 3. **Traceability**: Add a "Statement Identifier" column/link to the Transactions table, allowing users to trace a transaction back to its source statement.
+
+## 2025-12-08: Real Data, Filtering & Preparation for M2 (Session 3)
+
+**Current Status**: M1 — Statement Ingestion MVP (Complete)
+
+We finalized the M1 milestone by connecting the frontend to real database data, refining the transaction filtering, and polishing the UI. We also laid the groundwork for the next major phase: Categorization.
+
+### Recent Accomplishments
+- **Real Data Integration**:
+    - Dashboard and Transactions pages now fetch live data from Supabase.
+    - Transaction "Total Spend" calculation corrected (sums positive amounts).
+- **Refined Filtering**:
+    - Implemented **Statement-level filtering** within the Transactions page. Users can now drill down to specific statements (e.g. "DBS Sep 2024").
+    - "Unknown" statement names now fallback to the **PDF filename**, solving the "Unknown Bank" issue.
+- **Traceability & Safety**:
+    - Added clickable source links in the transaction table.
+    - **Critical Fix**: Implemented robust duplicate handling. The system now gracefully ignores existing transactions during import instead of crashing.
+- **Documentation**:
+    - Standardized all Specification docs (`0`, `1`, `2`, `3`) with a consistent "Changelog" format.
+    - Created `docs/specs/3-categorization-and-onboarding.md` detailing the plan for the next phase.
+
+### Next Steps (M2 / Next Session)
+1. **Schema Update**: Create `categories` table and add `is_payment` flag to transactions.
+2. **UI Implementation**: Build the "Manage Categories" view and Onboarding Modal.
+3. **Logic Update**: Update backend to exclude payments from total spend.
