@@ -1,11 +1,11 @@
 'use client'
 
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+
 import { NavHeader } from '@/components/nav-header'
 import { TransactionTable } from '@/components/transaction-table'
-import { useTransactions } from '@/lib/hooks/use-transactions'
-import { formatCurrency } from '@/lib/utils'
-import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
 import {
     Select,
     SelectContent,
@@ -13,6 +13,8 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select'
+import { useTransactions } from '@/lib/hooks/use-transactions'
+import { formatCurrency } from '@/lib/utils'
 import { ChevronLeft, ChevronRight, Loader2 } from 'lucide-react'
 
 function formatMonthLabel(month: string): string {
@@ -22,10 +24,15 @@ function formatMonthLabel(month: string): string {
 }
 
 export default function TransactionsPage() {
+    const router = useRouter()
+    const pathname = usePathname()
+    const searchParams = useSearchParams()
+
     const {
         transactions,
         summary,
         availableMonths,
+        availableStatements,
         selectedMonth,
         setSelectedMonth,
         isLoading,
@@ -56,18 +63,47 @@ export default function TransactionsPage() {
                 {/* Header */}
                 <div className="flex items-center justify-between mb-8">
                     <h1 className="text-2xl font-bold">Transactions</h1>
-                    <Select value={selectedMonth || ''} onValueChange={setSelectedMonth}>
-                        <SelectTrigger className="w-[180px]">
-                            <SelectValue placeholder="Select month" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            {availableMonths.map((month) => (
-                                <SelectItem key={month} value={month}>
-                                    {formatMonthLabel(month)}
-                                </SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
+                    <div className="flex gap-4">
+                        {availableStatements.length > 0 && (
+                            <Select
+                                value={searchParams.get('statement') || 'all'}
+                                onValueChange={(value) => {
+                                    const params = new URLSearchParams(searchParams.toString())
+                                    if (value === 'all') {
+                                        params.delete('statement')
+                                    } else {
+                                        params.set('statement', value)
+                                    }
+                                    router.push(`${pathname}?${params.toString()}`)
+                                }}
+                            >
+                                <SelectTrigger className="w-[240px]">
+                                    <SelectValue placeholder="All Statements" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="all">All Statements</SelectItem>
+                                    {availableStatements.map((stmt) => (
+                                        <SelectItem key={stmt.id} value={stmt.id}>
+                                            {stmt.label}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        )}
+
+                        <Select value={selectedMonth || ''} onValueChange={setSelectedMonth}>
+                            <SelectTrigger className="w-[180px]">
+                                <SelectValue placeholder="Select month" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {availableMonths.map((month) => (
+                                    <SelectItem key={month} value={month}>
+                                        {formatMonthLabel(month)}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </div>
                 </div>
 
                 {/* Summary Bar */}

@@ -1,4 +1,3 @@
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import {
     Table,
     TableBody,
@@ -8,6 +7,8 @@ import {
     TableRow,
 } from '@/components/ui/table'
 import type { Transaction } from '@/lib/types/transaction'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import Link from 'next/link'
 
 interface TransactionTableProps {
     transactions: Transaction[]
@@ -52,13 +53,19 @@ export function TransactionTable({
                             </TableCell>
                             <TableCell className={cn(
                                 'text-right font-mono',
-                                transaction.amount < 0 ? 'text-destructive' : 'text-success'
+                                transaction.amount < 0 ? 'text-destructive' : ''
                             )}>
                                 {formatCurrency(Math.abs(transaction.amount), transaction.currency)}
                             </TableCell>
                             {showSource && (
                                 <TableCell className="text-muted-foreground text-sm">
-                                    {transaction.source}
+                                    {transaction.statementId ? (
+                                        <Link href={`/transactions?statement=${transaction.statementId}`} className="hover:underline">
+                                           {transaction.source}
+                                        </Link>
+                                    ) : (
+                                        transaction.source
+                                    )}
                                 </TableCell>
                             )}
                         </TableRow>

@@ -1,6 +1,11 @@
 # PDF Parsing Pipeline — Spec Document (v2)
 
-_Last updated: 2025-12-03_
+## Changelog
+
+| Date | Author | Description |
+| :--- | :--- | :--- |
+| 2025-12-03 | ebertulfo | v2 Update: Safe parsing, statement awareness, rate limiting |
+| 2025-11-20 | ebertulfo | Initial draft |
 
 ## Objective
 
@@ -170,6 +175,10 @@ type ParsedTable = {
   page: number;              // Always 1 (represents "all pages")
   headers: string[] | null;  // ["Date", "Description", "Amount"]
   rows: string[][];          // Transaction data
+  /** Optional metadata extracted from the parser context */
+  metadata?: {
+    inferredYear?: number;   // Year inferred from statement text (e.g. "Sep 2024")
+  };
 };
 
 type ParseSuccessResponse = {

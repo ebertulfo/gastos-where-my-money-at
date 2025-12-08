@@ -1,5 +1,11 @@
 # Transaction Identifier Specification
 
+## Changelog
+
+| Date | Author | Description |
+| :--- | :--- | :--- |
+| 2025-12-03 | ebertulfo | Initial draft defining the deterministic ID format |
+
 ## Overview
 
 Each transaction extracted from a bank/credit card statement needs a unique identifier for deduplication purposes. This prevents duplicate imports when:

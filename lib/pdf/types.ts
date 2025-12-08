@@ -8,6 +8,10 @@ export type ParsedTable = {
   headers: string[] | null;
   /** Data rows (excluding header if present) */
   rows: string[][];
+  /** Optional metadata extracted from the parser context */
+  metadata?: {
+    inferredYear?: number;
+  };
 };
 
 /**

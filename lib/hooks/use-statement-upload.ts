@@ -2,72 +2,106 @@
 
 import { useState, useCallback } from 'react'
 import { uploadStatement, parseStatementProgress, type ParsingStep } from '@/lib/services/statement-service'
+import { supabase } from '@/lib/supabase/client'
+
+export interface UploadState {
+    id: string
+    file: File
+    status: 'pending' | 'uploading' | 'processing' | 'complete' | 'error'
+    progress: number
+    error?: string
+    statementId?: string
+}
 
 interface UseStatementUploadReturn {
-    upload: (file: File) => Promise<string | null>
+    upload: (files: File[]) => Promise<void>
+    uploads: UploadState[]
     isUploading: boolean
-    isParsing: boolean
-    currentStep: ParsingStep
-    progress: number
-    error: string | null
     reset: () => void
 }
 
 export function useStatementUpload(): UseStatementUploadReturn {
+    const [uploads, setUploads] = useState<UploadState[]>([])
     const [isUploading, setIsUploading] = useState(false)
-    const [isParsing, setIsParsing] = useState(false)
-    const [currentStep, setCurrentStep] = useState<ParsingStep>('uploading')
-    const [progress, setProgress] = useState(0)
-    const [error, setError] = useState<string | null>(null)
 
     const reset = useCallback(() => {
+        setUploads([])
         setIsUploading(false)
-        setIsParsing(false)
-        setCurrentStep('uploading')
-        setProgress(0)
-        setError(null)
     }, [])
 
-    const upload = useCallback(async (file: File): Promise<string | null> => {
-        reset()
+    const upload = useCallback(async (files: File[]) => {
         setIsUploading(true)
 
-        try {
-            // Step 1: Upload the file
-            const { statementId } = await uploadStatement(file)
-
-            setIsUploading(false)
-            setIsParsing(true)
-
-            // Step 2: Track parsing progress
-            for await (const update of parseStatementProgress(statementId)) {
-                setCurrentStep(update.step)
-                setProgress(update.progress)
-
-                if (update.error) {
-                    setError(update.error)
-                    setIsParsing(false)
-                    return null
-                }
+        // Check for session and sign in anonymously if needed
+        const { data: { session } } = await supabase.auth.getSession()
+        if (!session) {
+            const { error: signInError } = await supabase.auth.signInAnonymously()
+            if (signInError) {
+                console.error("Anonymous sign-in failed:", signInError)
+                setUploads(prev => [...prev, ...files.map(f => ({
+                    id: Math.random().toString(36).substring(7),
+                    file: f,
+                    status: 'error' as const,
+                    progress: 0,
+                    error: "Could not sign in. Please try again."
+                }))])
+                setIsUploading(false)
+                return
             }
-
-            setIsParsing(false)
-            return statementId
-        } catch (err) {
-            setError(err instanceof Error ? err.message : 'An error occurred while uploading')
-            setIsUploading(false)
-            setIsParsing(false)
-            return null
         }
-    }, [reset])
+        
+        // Initialize state for new files
+        const newUploads = files.map(file => ({
+            id: Math.random().toString(36).substring(7),
+            file,
+            status: 'pending' as const,
+            progress: 0
+        }))
+
+        setUploads(prev => [...prev, ...newUploads])
+
+        // Process files sequentially to avoid overwhelming the server
+        // (Parallel could be an option for small batches)
+        for (const uploadItem of newUploads) {
+            setUploads(prev => prev.map(u => 
+                u.id === uploadItem.id ? { ...u, status: 'uploading', progress: 0 } : u
+            ))
+
+            try {
+                // Upload
+                setUploads(prev => prev.map(u => 
+                    u.id === uploadItem.id ? { ...u, progress: 50, status: 'processing' } : u
+                ))
+
+                // Get the latest session to ensure we have the token
+                const { data: { session } } = await supabase.auth.getSession()
+                const { statementId } = await uploadStatement(uploadItem.file, session?.access_token)
+
+                // Success
+                setUploads(prev => prev.map(u => 
+                    u.id === uploadItem.id ? { 
+                        ...u, 
+                        status: 'complete', 
+                        progress: 100, 
+                        statementId 
+                    } : u
+                ))
+
+            } catch (err) {
+                const errorMsg = err instanceof Error ? err.message : 'Upload failed'
+                setUploads(prev => prev.map(u => 
+                    u.id === uploadItem.id ? { ...u, status: 'error', error: errorMsg } : u
+                ))
+            }
+        }
+
+        setIsUploading(false)
+    }, [])
 
     return {
         upload,
+        uploads,
         isUploading,
-        isParsing,
-        currentStep,
-        progress,
-        error,
         reset,
     }
 }

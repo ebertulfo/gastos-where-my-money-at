@@ -23,6 +23,11 @@ export class UnsupportedPdfError extends Error {
   }
 }
 
+interface PageData {
+  num: number;
+  text: string;
+}
+
 /**
  * Extracts all tables from a PDF buffer using heuristic-based text parsing.
  *
@@ -186,11 +191,15 @@ export async function extractTablesFromPdf(
       page: 1, // Represents "all pages"
       headers: headersWithId,
       rows: rowsWithIds,
+      metadata: {
+        inferredYear: defaultYear,
+      },
     };
 
     return [consolidatedTable];
-  } finally {
-    await parser.destroy();
+  } catch (error) {
+     if (error instanceof UnsupportedPdfError) throw error;
+     throw new Error(`Failed to parse PDF: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -821,6 +830,7 @@ function inferDefaultYearFromText(text: string): number | undefined {
   }
 
   if (yearCandidates.size === 0) return undefined;
+  console.log('@@@ yearCandidates', yearCandidates);
   return Math.max(...yearCandidates);
 }
 

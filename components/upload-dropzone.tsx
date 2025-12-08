@@ -1,13 +1,13 @@
 'use client'
 
-import { useState, useCallback, useRef } from 'react'
-import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Upload, FileText, X, AlertCircle } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { AlertCircle, Upload } from 'lucide-react'
+import { useCallback, useRef, useState } from 'react'
 
 interface UploadDropzoneProps {
-    onFileSelect: (file: File) => void
+    onFileSelect: (files: File[]) => void
     isUploading?: boolean
     accept?: string
     maxSize?: number // in bytes
@@ -23,7 +23,6 @@ export function UploadDropzone({
 }: UploadDropzoneProps) {
     const [isDragging, setIsDragging] = useState(false)
     const [error, setError] = useState<string | null>(null)
-    const [selectedFile, setSelectedFile] = useState<File | null>(null)
     const inputRef = useRef<HTMLInputElement>(null)
 
     const validateFile = useCallback((file: File): string | null => {
@@ -36,27 +35,31 @@ export function UploadDropzone({
         return null
     }, [maxSize])
 
-    const handleFile = useCallback((file: File) => {
-        const validationError = validateFile(file)
-        if (validationError) {
-            setError(validationError)
-            setSelectedFile(null)
-            return
+    const handleFileChange = useCallback((files: FileList | null) => {
+        if (!files) return
+        
+        const validFiles: File[] = []
+        for (let i = 0; i < files.length; i++) {
+             const file = files[i]
+             const validationError = validateFile(file)
+             if (validationError) {
+                 setError(validationError)
+             } else {
+                 validFiles.push(file)
+             }
         }
-        setError(null)
-        setSelectedFile(file)
-        onFileSelect(file)
+        
+        if (validFiles.length > 0) {
+            setError(null)
+            onFileSelect(validFiles)
+        }
     }, [validateFile, onFileSelect])
 
     const handleDrop = useCallback((e: React.DragEvent) => {
         e.preventDefault()
         setIsDragging(false)
-
-        const file = e.dataTransfer.files[0]
-        if (file) {
-            handleFile(file)
-        }
-    }, [handleFile])
+        handleFileChange(e.dataTransfer.files)
+    }, [handleFileChange])
 
     const handleDragOver = useCallback((e: React.DragEvent) => {
         e.preventDefault()
@@ -69,19 +72,8 @@ export function UploadDropzone({
     }, [])
 
     const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0]
-        if (file) {
-            handleFile(file)
-        }
-    }, [handleFile])
-
-    const clearSelection = useCallback(() => {
-        setSelectedFile(null)
-        setError(null)
-        if (inputRef.current) {
-            inputRef.current.value = ''
-        }
-    }, [])
+        handleFileChange(e.target.files)
+    }, [handleFileChange])
 
     return (
         <Card
@@ -99,62 +91,36 @@ export function UploadDropzone({
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
             >
-                {selectedFile && !isUploading ? (
-                    <div className="animate-fade-in">
-                        <div className="flex items-center justify-center gap-3 mb-4">
-                            <FileText className="h-10 w-10 text-primary" />
-                            <div className="text-left">
-                                <p className="font-medium text-foreground">{selectedFile.name}</p>
-                                <p className="text-sm text-muted-foreground">
-                                    {(selectedFile.size / 1024).toFixed(1)} KB
-                                </p>
-                            </div>
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={clearSelection}
-                                className="ml-2"
-                            >
-                                <X className="h-4 w-4" />
-                            </Button>
-                        </div>
-                        <p className="text-sm text-muted-foreground">
-                            Ready to parse. Drop another file to replace.
-                        </p>
-                    </div>
-                ) : (
-                    <>
-                        <Upload className={cn(
-                            'mx-auto h-12 w-12 mb-4 transition-colors',
-                            isDragging ? 'text-primary' : 'text-muted-foreground'
-                        )} />
-                        <p className="text-lg font-medium text-foreground mb-2">
-                            {isDragging ? 'Drop your statement here' : 'Drag & drop PDF statements here'}
-                        </p>
-                        <p className="text-muted-foreground mb-4">or</p>
-                        <Button
-                            variant="secondary"
-                            onClick={() => inputRef.current?.click()}
-                            disabled={isUploading}
-                        >
-                            Choose files
-                        </Button>
-                        <input
-                            ref={inputRef}
-                            type="file"
-                            accept={accept}
-                            onChange={handleInputChange}
-                            className="hidden"
-                            disabled={isUploading}
-                        />
-                        <p className="text-sm text-muted-foreground mt-4">
-                            Supported: Bank & credit card statements (PDF)
-                        </p>
-                        <p className="text-xs text-muted-foreground mt-1">
-                            We don't store your PDFs, only the extracted transactions.
-                        </p>
-                    </>
-                )}
+                <Upload className={cn(
+                    'mx-auto h-12 w-12 mb-4 transition-colors',
+                    isDragging ? 'text-primary' : 'text-muted-foreground'
+                )} />
+                <p className="text-lg font-medium text-foreground mb-2">
+                    {isDragging ? 'Drop your statements here' : 'Drag & drop PDF statements here'}
+                </p>
+                <p className="text-muted-foreground mb-4">or</p>
+                <Button
+                    variant="secondary"
+                    onClick={() => inputRef.current?.click()}
+                    disabled={isUploading}
+                >
+                    Choose files
+                </Button>
+                <input
+                    ref={inputRef}
+                    type="file"
+                    accept={accept}
+                    multiple
+                    onChange={handleInputChange}
+                    className="hidden"
+                    disabled={isUploading}
+                />
+                <p className="text-sm text-muted-foreground mt-4">
+                    Supported: Bank & credit card statements (PDF)
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                    We don't store your PDFs, only the extracted transactions.
+                </p>
 
                 {error && (
                     <div className="flex items-center justify-center gap-2 mt-4 text-destructive animate-fade-in">

@@ -1,8 +1,6 @@
-'use client'
-
 import { useState, useEffect, useCallback } from 'react'
 import type { ImportReview, DuplicatePair } from '@/lib/types/transaction'
-import { getStatementReview, confirmImport } from '@/lib/services/statement-service'
+import { getReviewData, confirmStatementImport, deleteStatement } from '@/app/actions/statements'
 
 type DuplicateDecisions = Record<string, 'keep_existing' | 'add_new'>
 
@@ -13,7 +11,9 @@ interface UseStatementReviewReturn {
     duplicateDecisions: DuplicateDecisions
     setDuplicateDecision: (importId: string, decision: 'keep_existing' | 'add_new') => void
     confirm: () => Promise<boolean>
+    reject: () => Promise<boolean>
     isConfirming: boolean
+    isRejecting: boolean
 }
 
 export function useStatementReview(statementId: string): UseStatementReviewReturn {
@@ -22,6 +22,7 @@ export function useStatementReview(statementId: string): UseStatementReviewRetur
     const [error, setError] = useState<string | null>(null)
     const [duplicateDecisions, setDuplicateDecisions] = useState<DuplicateDecisions>({})
     const [isConfirming, setIsConfirming] = useState(false)
+    const [isRejecting, setIsRejecting] = useState(false)
 
     // Fetch review data
     useEffect(() => {
@@ -30,7 +31,7 @@ export function useStatementReview(statementId: string): UseStatementReviewRetur
             setError(null)
 
             try {
-                const data = await getStatementReview(statementId)
+                const data = await getReviewData(statementId)
                 setReview(data)
 
                 // Initialize all duplicate decisions to 'keep_existing' by default
@@ -40,6 +41,7 @@ export function useStatementReview(statementId: string): UseStatementReviewRetur
                 })
                 setDuplicateDecisions(initialDecisions)
             } catch (err) {
+                console.error("Fetch review error:", err)
                 setError(err instanceof Error ? err.message : 'Failed to load review data')
             } finally {
                 setIsLoading(false)
@@ -77,19 +79,39 @@ export function useStatementReview(statementId: string): UseStatementReviewRetur
                 })),
             ]
 
-            const result = await confirmImport({
-                statementId,
-                decisions,
-            })
+            const result = await confirmStatementImport(statementId, decisions)
 
-            return result.success
+            if (!result.success) {
+                throw new Error(result.error || 'Failed to confirm import')
+            }
+
+            return true
         } catch (err) {
+            console.error("Confirm error:", err)
             setError(err instanceof Error ? err.message : 'Failed to confirm import')
             return false
         } finally {
             setIsConfirming(false)
         }
     }, [review, duplicateDecisions, statementId])
+
+    const reject = useCallback(async (): Promise<boolean> => {
+        setIsRejecting(true)
+        setError(null)
+        try {
+            const result = await deleteStatement(statementId)
+            if (!result.success) {
+                throw new Error(result.error || 'Failed to delete statement')
+            }
+            return true
+        } catch (err) {
+            console.error("Reject error:", err)
+            setError(err instanceof Error ? err.message : 'Failed to delete statement')
+            return false
+        } finally {
+            setIsRejecting(false)
+        }
+    }, [statementId])
 
     return {
         review,
@@ -98,6 +120,8 @@ export function useStatementReview(statementId: string): UseStatementReviewRetur
         duplicateDecisions,
         setDuplicateDecision,
         confirm,
+        reject,
         isConfirming,
+        isRejecting,
     }
 }

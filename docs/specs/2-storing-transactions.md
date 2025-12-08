@@ -1,6 +1,11 @@
 # Transaction Storage & Deduplication — Spec (v0.1)
 
-_Last updated: 2025-12-05_
+## Changelog
+
+| Date | Author | Description |
+| :--- | :--- | :--- |
+| 2025-12-08 | ebertulfo | Updated with M1 features: Transactions page, Filename fallback, Duplicate safety |
+| 2025-12-05 | ebertulfo | Initial draft defining storage schema and deduplication rules |
 
 ## Objective
 
@@ -112,8 +117,18 @@ Indexes:
 - **Review screen**:
   - Section A: “New transactions” (no duplicates), grouped by `month_bucket`, with a single “Accept all new transactions” action.
   - Section B: “Potential duplicates” showing existing vs new side by side; default action “Keep existing (skip new)”, optional “Add as new anyway”.
-  - Finalize/commit button to move accepted rows into `transactions` and mark statement `ingested`.
-- Progress states: parsing → staging → awaiting review → ingested. Keep these visible in the UI.
+   - **Delete Import**: Option to completely reject/delete the statement and its pending transactions (for incorrect uploads).
+   - Finalize/commit button to move accepted rows into `transactions` and mark statement `ingested`.
+   - **Duplicate Safety**: The commit process uses `ON CONFLICT DO NOTHING` (graceful handling) to prevent crashes if a transaction already exists in the destination table.
+
+- **Transactions Page** (Main View):
+   - Displays real data fetched from `transactions` table.
+   - **Traceability**: Each transaction has a "Source" link (e.g., "DBS (Sep 2024)" or `filename.pdf` if bank is unknown) pointing to the statement context.
+   - **Filtering**:
+     - Filter by Month.
+     - Filter by specific **Statement** (Source) within that month.
+   - **Visuals**: Expenses shown in neutral color (not green), positive sum for "Total Spent".
+- Progress states: parsing → staging → awaiting review → ingested (or deleted). Keep these visible in the UI.
 
 ## Validation & Safety
 

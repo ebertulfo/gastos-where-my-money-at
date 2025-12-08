@@ -1,24 +1,24 @@
 'use client'
 
-import { use } from 'react'
-import { useRouter } from 'next/navigation'
+import { DuplicateComparison } from '@/components/duplicate-comparison'
 import { NavHeader } from '@/components/nav-header'
 import { TransactionTable } from '@/components/transaction-table'
-import { DuplicateComparison } from '@/components/duplicate-comparison'
-import { useStatementReview } from '@/lib/hooks/use-statement-review'
-import { formatDate, formatCurrency } from '@/lib/utils'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Separator } from '@/components/ui/separator'
 import {
     Accordion,
     AccordionContent,
     AccordionItem,
     AccordionTrigger,
 } from '@/components/ui/accordion'
-import { ArrowLeft, Check, AlertTriangle, Loader2 } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
+import { useStatementReview } from '@/lib/hooks/use-statement-review'
+import { formatDate } from '@/lib/utils'
+import { AlertTriangle, ArrowLeft, Check, Loader2 } from 'lucide-react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
+import { use } from 'react'
 
 interface ReviewPageProps {
     params: Promise<{ statementId: string }>
@@ -33,12 +33,14 @@ export default function ReviewPage({ params }: ReviewPageProps) {
         error,
         duplicateDecisions,
         setDuplicateDecision,
-        confirm,
+        confirm: confirmImport,
         isConfirming,
+        reject,
+        isRejecting,
     } = useStatementReview(statementId)
 
     const handleConfirm = async () => {
-        const success = await confirm()
+        const success = await confirmImport()
         if (success) {
             router.push('/transactions?month=2025-12')
         }
@@ -200,10 +202,28 @@ export default function ReviewPage({ params }: ReviewPageProps) {
 
                 {/* Footer Actions */}
                 <div className="flex items-center justify-between py-6 border-t">
-                    <Button variant="ghost" asChild>
-                        <Link href="/">Cancel</Link>
+                    <Button 
+                        variant="destructive" 
+                        onClick={async () => {
+                            if (window.confirm('Are you sure you want to delete this import? This action cannot be undone.')) {
+                                const success = await reject()
+                                if (success) {
+                                    router.push('/')
+                                }
+                            }
+                        }}
+                        disabled={isRejecting || isConfirming}
+                    >
+                        {isRejecting ? (
+                            <>
+                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                Deleting...
+                            </>
+                        ) : (
+                            'Delete Import'
+                        )}
                     </Button>
-                    <Button onClick={handleConfirm} disabled={isConfirming}>
+                    <Button onClick={handleConfirm} disabled={isConfirming || isRejecting}>
                         {isConfirming ? (
                             <>
                                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
