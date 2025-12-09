@@ -1,7 +1,7 @@
-import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
-import { Home, Receipt, BarChart3, Settings, User } from 'lucide-react'
+import { BarChart3, FileText, Home, Receipt, Settings, User } from 'lucide-react'
+import Link from 'next/link'
 
 export function NavHeader() {
     return (
@@ -19,6 +19,12 @@ export function NavHeader() {
                             <Link href="/" className="flex items-center gap-2">
                                 <Home className="h-4 w-4" />
                                 Upload
+                            </Link>
+                        </Button>
+                        <Button variant="ghost" size="sm" asChild>
+                            <Link href="/statements" className="flex items-center gap-2">
+                                <FileText className="h-4 w-4" />
+                                Statements
                             </Link>
                         </Button>
                         <Button variant="ghost" size="sm" asChild>

@@ -1,3 +1,5 @@
+'use client'
+
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -97,17 +99,20 @@ import {
     AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { Trash2 } from 'lucide-react'
+import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 
 function DeleteStatementDialog({ id, transactionCount }: { id: string, transactionCount?: number }) {
     const [open, setOpen] = useState(false)
     const [isDeleting, setIsDeleting] = useState(false)
+    const router = useRouter()
 
     const handleDelete = async () => {
         setIsDeleting(true)
         try {
             await deleteStatement(id)
             setOpen(false)
+            router.refresh()
         } catch (error) {
             console.error('Failed to delete statement', error)
             setIsDeleting(false)

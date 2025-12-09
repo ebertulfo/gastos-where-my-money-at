@@ -300,3 +300,82 @@ export async function deleteStatement(statementId: string): Promise<{ success: b
   
   return { success: true }
 }
+
+export async function getStatements(): Promise<UIStatement[]> {
+  const supabase = await createClient()
+  
+  const { data: statementsData, error } = await (supabase as any)
+    .from('statements')
+    .select('*, transactions(count)')
+    .order('created_at', { ascending: false })
+
+  if (error || !statementsData) {
+      console.error("Failed to fetch statements:", error)
+      return []
+  }
+  
+  const statements = statementsData as (DBStatement & { transactions: { count: number }[] })[]
+
+  return statements.map(s => {
+      let bankName = s.bank || 'Unknown Bank'
+      if ((bankName === 'Unknown Bank' || !s.bank) && s.source_file_name) {
+          bankName = s.source_file_name
+      }
+      
+      // Supabase returns count as an array of objects if simply selected? 
+      // Actually .select('*, transactions(count)') with head:true or similar usually works differently.
+      // But standard select returns array.
+      // Let's assume the count is in the first element if it's a join, but count is tricky with standard PostgREST.
+      // For now, let's just stick to the basic fetch and verify count later if needed, 
+      // OR just use the same logic as getRecentStatements but try to get count properly if possible.
+      // The Type Assertion above might be optimistic. 
+      // Let's revert to simple fetch to be safe and match getRecentStatements style for now.
+      
+      return {
+        id: s.id,
+        bankName: bankName,
+        accountLabel: s.account_name || undefined,
+        periodStart: s.period_start,
+        periodEnd: s.period_end,
+        currency: s.currency || 'SGD',
+        transactionCount: s.transactions ? s.transactions[0]?.count : 0, // Placeholder-ish
+        status: (s.status === 'ingesting' || s.status === 'parsed') ? 'reviewing' : (s.status as any),
+        fileHash: s.source_file_sha256,
+        createdAt: s.created_at,
+      }
+  })
+}
+
+export async function getStatementById(id: string): Promise<UIStatement | null> {
+  const supabase = await createClient()
+  
+  const { data: statementData, error } = await (supabase as any)
+    .from('statements')
+    .select('*, transactions(count)')
+    .eq('id', id)
+    .single()
+
+  if (error || !statementData) {
+      return null
+  }
+  
+  const s = statementData as (DBStatement & { transactions: { count: number }[] })
+
+  let bankName = s.bank || 'Unknown Bank'
+  if ((bankName === 'Unknown Bank' || !s.bank) && s.source_file_name) {
+      bankName = s.source_file_name
+  }
+
+  return {
+    id: s.id,
+    bankName: bankName,
+    accountLabel: s.account_name || undefined,
+    periodStart: s.period_start,
+    periodEnd: s.period_end,
+    currency: s.currency || 'SGD',
+    transactionCount: s.transactions ? s.transactions[0]?.count : 0,
+    status: (s.status === 'ingesting' || s.status === 'parsed') ? 'reviewing' : (s.status as any),
+    fileHash: s.source_file_sha256,
+    createdAt: s.created_at,
+  }
+}

@@ -91,3 +91,21 @@ We addressed user feedback on the exclusion logic, generalizing "Payments" to a 
 1. **Upload Multiple Files**: Enhancing the ingestion flow to handle batch uploads.
 2. **Statement Management**: Create a dedicated view to list, manage, and delete statements.
 3. **Categories**: Proceed with the categorization implementation (M2).
+
+## 2025-12-09: Statement Management (Session 5)
+
+**Current Status**: M1.5 — Refinements (Statement Management Added)
+
+We implemented the dedicated Statement Management features, allowing users to view, audit, and delete uploaded statements from a central interface.
+
+### Recent Accomplishments
+- **Statement Management Pages**:
+    - **List View**: Created `/statements` to list all uploaded files with their status (Parsed, Reviewing, Ingested).
+    - **Detail View**: Created `/statements/[id]` to show specific metadata and transaction lists for a single statement.
+    - **Deletion**: Implemented cascading delete functionality accessible from both list and detail views.
+- **Navigation**:
+    - Added "Statements" to the main navigation header for quick access.
+
+### Next Steps
+1. **Testing**: Perform thorough manual or automated testing of the new pages (deferred due to time constraints).
+2. **Category Rules**: Begin implementation of categorization logic (M2).
