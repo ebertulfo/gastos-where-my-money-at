@@ -55,7 +55,7 @@ export async function extractTablesFromPdf(
     // Must NOT have withdrawal/deposit column headers (which indicate bank statements)
     const hasBankColumns = /withdrawal.*deposit|deposit.*withdrawal|withdrawals\s+sgd|deposits\s+sgd/i.test(textResult.text);
     const hasCreditCardIndicators = /credit card|visa.*card|mastercard|minimum payment|previous balance|new transactions/i.test(textResult.text);
-    
+
     // Bank statement: has withdrawal/deposit columns OR "balance brought forward" pattern
     const isBankStatement = hasBankColumns || /balance brought forward|balance b\/f/i.test(textResult.text);
     // Credit card: has credit card indicators AND does NOT have bank columns
@@ -70,12 +70,12 @@ export async function extractTablesFromPdf(
     for (const pageResult of textResult.pages) {
       const pageNumber = pageResult.num;
       const pageText = pageResult.text;
-      
+
       // Use different extraction method based on statement type
-      const pageTables = isCreditCard 
+      const pageTables = isCreditCard
         ? extractCreditCardTransactions(pageText, pageNumber)
         : extractTablesFromPageText(pageText, pageNumber);
-      
+
       // Consolidate all tables into one
       for (const table of pageTables) {
         // Capture the first header we find
@@ -102,18 +102,18 @@ export async function extractTablesFromPdf(
       // Index: 0=Date, 1=Description, 2=TransactionAmount, 3=Balance
       const AMOUNT_IDX = 2;
       const BALANCE_IDX = 3;
-      
+
       // Use balance comparison to determine withdrawals vs deposits
       // If balance decreased, it's a withdrawal; if increased, it's a deposit
       let previousBalance: number | null = null;
       const withdrawalRows: string[][] = [];
-      
+
       for (const row of allRows) {
         const currentBalanceStr = row[BALANCE_IDX]?.replace(/,/g, '');
         const currentBalance = currentBalanceStr ? parseFloat(currentBalanceStr) : null;
         const amountStr = row[AMOUNT_IDX]?.replace(/,/g, '');
         const transactionAmt = amountStr ? parseFloat(amountStr) : null;
-        
+
         // Skip balance-only rows (no transaction amount)
         if (!transactionAmt) {
           if (currentBalance !== null) {
@@ -121,11 +121,11 @@ export async function extractTablesFromPdf(
           }
           continue;
         }
-        
+
         // Determine if this is a withdrawal based on balance change
         if (previousBalance !== null && currentBalance !== null) {
           const balanceDiff = currentBalance - previousBalance;
-          
+
           // Balance decreased = withdrawal (money went out)
           // We use a small threshold to handle floating point issues
           if (balanceDiff < -0.001) {
@@ -140,12 +140,12 @@ export async function extractTablesFromPdf(
           }
           // If balanceDiff >= 0, it's a deposit - skip it
         }
-        
+
         if (currentBalance !== null) {
           previousBalance = currentBalance;
         }
       }
-      
+
       // Use the withdrawalRows we collected
       filteredRows = withdrawalRows;
 
@@ -158,13 +158,13 @@ export async function extractTablesFromPdf(
         .filter((row) => {
           const description = row[1]?.trim() || '';
           const amount = row[2]?.trim() || '';
-          
+
           // Skip if no amount
           if (!amount || !/\d/.test(amount)) return false;
-          
+
           // Skip rows with very long descriptions (likely preamble that slipped through)
           if (description.length > 150) return false;
-          
+
           return true;
         })
         // Sanitize descriptions to remove sensitive patterns
@@ -198,8 +198,8 @@ export async function extractTablesFromPdf(
 
     return [consolidatedTable];
   } catch (error) {
-     if (error instanceof UnsupportedPdfError) throw error;
-     throw new Error(`Failed to parse PDF: ${error instanceof Error ? error.message : String(error)}`);
+    if (error instanceof UnsupportedPdfError) throw error;
+    throw new Error(`Failed to parse PDF: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -226,11 +226,11 @@ interface ColumnInfo {
  */
 function extractHeaderColumnPositions(headerLine: string): ColumnInfo[] {
   const columns: ColumnInfo[] = [];
-  
+
   // Split by 2+ spaces to find column headers
   const parts = headerLine.split(/(\s{2,})/);
   let pos = 0;
-  
+
   for (const part of parts) {
     if (/\s{2,}/.test(part)) {
       pos += part.length;
@@ -245,7 +245,7 @@ function extractHeaderColumnPositions(headerLine: string): ColumnInfo[] {
       pos = endPos;
     }
   }
-  
+
   return columns;
 }
 
@@ -255,7 +255,7 @@ function extractHeaderColumnPositions(headerLine: string): ColumnInfo[] {
 function findColumnForAmount(amountPos: number, columns: ColumnInfo[]): number {
   let bestIdx = -1;
   let bestDistance = Infinity;
-  
+
   for (let i = 0; i < columns.length; i++) {
     const distance = Math.abs(amountPos - columns[i].centerPos);
     if (distance < bestDistance) {
@@ -263,7 +263,7 @@ function findColumnForAmount(amountPos: number, columns: ColumnInfo[]): number {
       bestIdx = i;
     }
   }
-  
+
   return bestIdx;
 }
 
@@ -276,51 +276,51 @@ function parseTransactionWithColumnPositions(
   columnPositions: ColumnInfo[]
 ): string[] | null {
   if (lines.length === 0 || columnPositions.length === 0) return null;
-  
+
   const firstLine = lines[0];
   const trimmed = firstLine.trim();
   const date = extractDate(trimmed);
   if (!date) return null;
-  
+
   // Initialize result array with empty strings for each column
   const result: string[] = new Array(columnPositions.length).fill('');
-  
+
   // Find which column is which by name
   const dateColIdx = columnPositions.findIndex(c => /date/i.test(c.name));
   const descColIdx = columnPositions.findIndex(c => /description|particulars/i.test(c.name));
   const withdrawalColIdx = columnPositions.findIndex(c => /withdrawal|debit/i.test(c.name));
   const depositColIdx = columnPositions.findIndex(c => /deposit|credit/i.test(c.name));
   const balanceColIdx = columnPositions.findIndex(c => /balance/i.test(c.name));
-  
+
   // Set date
   if (dateColIdx >= 0) result[dateColIdx] = date;
-  
+
   // Collect description and amounts from all lines
   const descParts: string[] = [];
-  
+
   for (const line of lines) {
     // Find all amounts and their positions in this line
     const amountPattern = /\b(\d{1,3}(?:,\d{3})*\.\d{2})\b/g;
     let match;
-    
+
     while ((match = amountPattern.exec(line)) !== null) {
       const amount = match[1];
       const amountPos = match.index + amount.length / 2; // Center of amount
-      
+
       // Find which column this amount belongs to
       const colIdx = findColumnForAmount(amountPos, columnPositions);
-      
+
       // Only assign to withdrawal, deposit, or balance columns
       if (colIdx === withdrawalColIdx || colIdx === depositColIdx || colIdx === balanceColIdx) {
         result[colIdx] = amount;
       }
     }
-    
+
     // Extract description text (non-amount parts)
     const textPart = line
       .replace(/\b\d{1,3}(?:,\d{3})*\.\d{2}\b/g, '') // Remove amounts
       .trim();
-    
+
     // For first line, remove the date
     if (line === lines[0] && date) {
       const withoutDate = textPart.replace(date, '').trim();
@@ -329,12 +329,12 @@ function parseTransactionWithColumnPositions(
       descParts.push(textPart);
     }
   }
-  
+
   // Set description
   if (descColIdx >= 0) {
     result[descColIdx] = descParts.join(' ').trim();
   }
-  
+
   return result;
 }
 
@@ -386,7 +386,7 @@ function extractColumnAmount(line: string): string | null {
   if (match) {
     return match[1];
   }
-  
+
   // Fallback: if line ends with an amount (with possible single space)
   const endAmountPattern = /(\d{1,3}(?:,\d{3})*\.\d{2})\s*$/;
   const endMatch = line.match(endAmountPattern);
@@ -398,7 +398,7 @@ function extractColumnAmount(line: string): string | null {
       return endMatch[1];
     }
   }
-  
+
   return null;
 }
 
@@ -407,21 +407,52 @@ function extractColumnAmount(line: string): string | null {
  * Credit card statements typically have: Date, Description, Amount
  * Returns rows as [Date, Description, Amount]
  */
-function extractCreditCardTransactions(
+export function extractCreditCardTransactions(
   pageText: string,
   pageNumber: number
 ): ParsedTable[] {
   const lines = pageText.split(/\r?\n/);
   const rows: string[][] = [];
-  
+
   let currentTransaction: { date: string; descParts: string[]; amount: string } | null = null;
-  
+
+  // New helper for foreign currency check
+  const isForeignCurrencyLine = (line: string): boolean => {
+    const currencyKeywords = /\b(YEN|PESO|USD|EUR|GBP|AUD|CAD|HKD|MYR|CNY|KRW|THB|IDR|VND|INR|CHF|NZD)\b/i;
+    return currencyKeywords.test(line);
+  };
+
   const flushTransaction = () => {
-    if (currentTransaction && currentTransaction.amount) {
-      const description = currentTransaction.descParts.join(' ').trim();
-      // Only add if it looks like a real transaction
-      if (description && !isNonTransactionLine(description)) {
-        rows.push([currentTransaction.date, description, currentTransaction.amount]);
+    if (currentTransaction) {
+      // Fallback: If amount is missing, check if it was captured in the description
+      if (!currentTransaction.amount && currentTransaction.descParts.length > 0) {
+        const fullDesc = currentTransaction.descParts.join(' ');
+
+        // Look for any amount-like pattern in the description
+        // (Since we strip amounts from continuation lines, any remaining amount is likely the valid one from line 1)
+        const amountMatch = fullDesc.match(/\b(\d{1,3}(?:,\d{3})*\.\d{2})\b/);
+
+        if (amountMatch) {
+          currentTransaction.amount = amountMatch[1];
+          // Remove it from description parts
+          // Iterate and remove from the specific part it belongs to
+          for (let i = 0; i < currentTransaction.descParts.length; i++) {
+            if (currentTransaction.descParts[i].includes(currentTransaction.amount)) {
+              currentTransaction.descParts[i] = currentTransaction.descParts[i]
+                .replace(currentTransaction.amount, '')
+                .trim();
+              break;
+            }
+          }
+        }
+      }
+
+      if (currentTransaction.amount) {
+        const description = currentTransaction.descParts.join(' ').trim();
+        // Only add if it looks like a real transaction
+        if (description && !isNonTransactionLine(description)) {
+          rows.push([currentTransaction.date, description, currentTransaction.amount]);
+        }
       }
     }
     currentTransaction = null;
@@ -430,23 +461,23 @@ function extractCreditCardTransactions(
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    
+
     // Skip summary and non-transaction lines
     if (isSummaryOrEndLine(trimmed) || isNonTransactionLine(trimmed)) {
       flushTransaction();
       continue;
     }
-    
+
     // Check if line starts with a date
     const date = extractDate(trimmed);
     if (date) {
       // Flush previous transaction
       flushTransaction();
-      
+
       // Extract the column amount (rightmost, separated by whitespace)
       // Use original line to preserve spacing for column detection
       const columnAmount = extractColumnAmount(line);
-      
+
       // Get description: everything after date, excluding the column amount
       let descriptionPart = line.slice(line.toLowerCase().indexOf(date.toLowerCase()) + date.length).trim();
       if (columnAmount) {
@@ -456,10 +487,10 @@ function extractCreditCardTransactions(
           descriptionPart = descriptionPart.slice(0, amountIndex).trim();
         }
       }
-      
+
       // Also remove any remaining amounts from description (embedded foreign currency amounts)
       descriptionPart = descriptionPart.replace(/\b\d{1,3}(?:,\d{3})*\.\d{2}\s*$/g, '').trim();
-      
+
       currentTransaction = {
         date,
         descParts: descriptionPart ? [descriptionPart] : [],
@@ -468,18 +499,20 @@ function extractCreditCardTransactions(
     } else if (currentTransaction) {
       // Continuation line - check if it might contain the column amount
       // (PDF extraction sometimes puts amounts on separate lines)
-      
+
+      const isForeign = isForeignCurrencyLine(trimmed);
+
       // First, check if this line is JUST an amount (column amount on its own line)
       const justAmountMatch = trimmed.match(/^(\d{1,3}(?:,\d{3})*\.\d{2})$/);
-      if (justAmountMatch && !currentTransaction.amount) {
+      if (justAmountMatch && !currentTransaction.amount && !isForeign) {
         currentTransaction.amount = justAmountMatch[1];
         continue;
       }
-      
+
       // Check for column amount at end of this line (if we don't have one)
       if (!currentTransaction.amount) {
         const lineColumnAmount = extractColumnAmount(line);
-        if (lineColumnAmount) {
+        if (lineColumnAmount && !isForeign) {
           currentTransaction.amount = lineColumnAmount;
           // Get the text part without the amount
           const textPart = trimmed.replace(/\s*\d{1,3}(?:,\d{3})*\.\d{2}\s*$/, '').trim();
@@ -494,24 +527,24 @@ function extractCreditCardTransactions(
           continue;
         }
       }
-      
+
       // Regular continuation line - add text to description, strip all amounts
       // (these are foreign currency amounts or other embedded numbers)
       const textPart = trimmed.replace(/\b\d{1,3}(?:,\d{3})*\.\d{2}\b/g, '').trim();
-      
+
       if (textPart) {
         currentTransaction.descParts.push(textPart);
       }
     }
   }
-  
+
   // Flush last transaction
   flushTransaction();
-  
+
   if (rows.length < MIN_ROWS_FOR_TABLE) {
     return [];
   }
-  
+
   return [{
     page: pageNumber,
     headers: ['Date', 'Description', 'Amount'],
@@ -525,7 +558,7 @@ function extractCreditCardTransactions(
 function isHeaderLine(line: string): boolean {
   const cells = line.trim().split(/\s{2,}/).filter(Boolean);
   if (cells.length < 2) return false;
-  
+
   const headerKeywords = /^(date|description|withdrawal|deposit|balance|amount|debit|credit|transaction|particulars|reference)/i;
   return cells.every((cell) => /[A-Za-z]/.test(cell)) && headerKeywords.test(cells[0]);
 }
@@ -610,18 +643,18 @@ function parseMultiLineTransaction(lines: string[]): string[] | null {
   // Collect all text and amounts from all lines
   const allText: string[] = [];
   const allAmounts: string[] = [];
-  
+
   for (const line of lines) {
     const lineTrimmed = line.trim();
     if (!lineTrimmed) continue;
-    
+
     // Extract amounts
     const amountPattern = /\b(\d{1,3}(?:,\d{3})*\.\d{2})\b/g;
     let match;
     while ((match = amountPattern.exec(lineTrimmed)) !== null) {
       allAmounts.push(match[1]);
     }
-    
+
     // Extract non-amount text
     const textOnly = lineTrimmed
       .replace(/\b\d{1,3}(?:,\d{3})*\.\d{2}\b/g, '') // Remove amounts
@@ -629,12 +662,12 @@ function parseMultiLineTransaction(lines: string[]): string[] | null {
       .trim();
     if (textOnly) allText.push(textOnly);
   }
-  
+
   const description = allText.join(' ').trim();
   result[1] = description;
-  
+
   if (allAmounts.length === 0) return null;
-  
+
   // Simple extraction: last amount is balance, first non-balance amount is transaction
   if (allAmounts.length === 1) {
     // Single amount - could be balance-only row (e.g., "BALANCE B/F")
@@ -649,7 +682,7 @@ function parseMultiLineTransaction(lines: string[]): string[] | null {
     result[2] = allAmounts[0]; // Transaction amount
     result[3] = allAmounts[allAmounts.length - 1]; // Balance
   }
-  
+
   return result;
 }
 
@@ -678,11 +711,11 @@ export function extractTablesFromPageText(
   const flushTransaction = () => {
     if (currentTransaction.length > 0) {
       let parsed: string[] | null = null;
-      
+
       // Use column positions if available, otherwise fall back to heuristics
       if (columnPositions && columnPositions.length > 0) {
         parsed = parseTransactionWithColumnPositions(currentTransaction, columnPositions);
-        
+
         // Convert to standard 5-column format: [Date, Description, Withdrawal, Deposit, Balance]
         if (parsed) {
           const withdrawalIdx = columnPositions.findIndex(c => /withdrawal|debit/i.test(c.name));
@@ -690,7 +723,7 @@ export function extractTablesFromPageText(
           const balanceIdx = columnPositions.findIndex(c => /balance/i.test(c.name));
           const descIdx = columnPositions.findIndex(c => /description|particulars/i.test(c.name));
           const dateIdx = columnPositions.findIndex(c => /date/i.test(c.name));
-          
+
           const standardRow = [
             dateIdx >= 0 ? parsed[dateIdx] : '',
             descIdx >= 0 ? parsed[descIdx] : '',
@@ -703,7 +736,7 @@ export function extractTablesFromPageText(
       } else {
         parsed = parseMultiLineTransaction(currentTransaction);
       }
-      
+
       if (parsed && parsed.length >= 2) {
         currentBlock.push(parsed);
       }
@@ -805,33 +838,85 @@ export function guessHeaders(rows: string[][]): string[] | null {
  */
 function inferDefaultYearFromText(text: string): number | undefined {
   const yearCandidates = new Set<number>();
+  const currentYear = new Date().getFullYear();
 
-  // DD/MM/YYYY, DD-MM-YYYY, DD/MM/YY, DD-MM-YY
-  const dmyPattern = /\b\d{1,2}[/-]\d{1,2}[/-](\d{2,4})\b/g;
+  // 1. Explicit Statement Date patterns (highest confidence)
+  // Matches: "Statement Date: 30 Dec 2025", "Date: 12 January 2025"
+  const statementDatePattern = /(?:statement|bill)?\s*date\s*[:.]?\s*(\d{1,2}\s+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|SEPT|OCT|NOV|DEC|JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\w*\s+(?:20\d{2}|19\d{2}))/gi;
   let match: RegExpExecArray | null;
-  while ((match = dmyPattern.exec(text)) !== null) {
-    const year = coerceYear(match[1]);
-    if (year) yearCandidates.add(year);
+  while ((match = statementDatePattern.exec(text)) !== null) {
+    const yearMatch = match[1].match(/(20\d{2}|19\d{2})/);
+    if (yearMatch) {
+      yearCandidates.add(Number(yearMatch[1]));
+    }
   }
 
-  // YYYY/MM/DD or YYYY-MM-DD
+  // 2. DD/MM/YYYY etc
+  const dmyPattern = /\b\d{1,2}[/-]\d{1,2}[/-](\d{2,4})\b/g;
+  while ((match = dmyPattern.exec(text)) !== null) {
+    const year = coerceYear(match[1]);
+    if (year && year <= currentYear + 1) yearCandidates.add(year); // Sanity check
+  }
+
+  // 3. YYYY/MM/DD
   const ymdPattern = /\b(20\d{2}|19\d{2})[/-]\d{1,2}[/-]\d{1,2}\b/g;
   while ((match = ymdPattern.exec(text)) !== null) {
     const year = Number(match[1]);
-    yearCandidates.add(year);
+    if (year <= currentYear + 1) yearCandidates.add(year);
   }
 
-  // DD MMM YYYY (month name)
+  // 4. DD MMM YYYY (including full months)
   const monthNamePattern =
-    /\b\d{1,2}\s+(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|SEPT|OCT|NOV|DEC)\s+(20\d{2}|19\d{2})\b/gi;
+    /\b\d{1,2}\s+(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|SEPT|OCT|NOV|DEC|JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\w*\s+(20\d{2}|19\d{2})\b/gi;
   while ((match = monthNamePattern.exec(text)) !== null) {
     const year = Number(match[2]);
-    yearCandidates.add(year);
+    if (year <= currentYear + 1) yearCandidates.add(year);
   }
 
   if (yearCandidates.size === 0) return undefined;
-  console.log('@@@ yearCandidates', yearCandidates);
-  return Math.max(...yearCandidates);
+
+  // Prefer the most commonly occurring year? Or just max?
+  // Usually max is correct for statements at year boundary (Dec 2025 statement often has Jan 2026 due date)
+  // WARNING: "Payment Due Date 26 Jan 2026". "Statement Date 30 Dec 2025".
+  // If we pick MAX, we get 2026. This causes the bug!
+  // We want the STATEMENT YEAR, not the Due Date year.
+  // BUT logic is "inferDefaultYearFromText".
+  // If we pick 2026, then "26 JAN" -> 2026 (Correct). "29 NOV" -> "29 NOV 2026" (WRONG).
+  // If we pick 2025. "26 JAN" -> "26 JAN 2025" (WRONG - 1 year ago!). "29 NOV" -> "29 NOV 2025" (Correct).
+
+  // This is tricky. Text contains BOTH years.
+  // We need to parse dates relative to the "Statement Date" if found.
+  // But this function just returns A year.
+
+  // Strategy:
+  // If we have explicit "Statement Date" pattern, use that year ONLY.
+  // Otherwise, use statistical approach?
+  // Or just return undefined and let route.ts handle logic? No, route.ts is simpler.
+
+  // Let's refine:
+  // Re-run the specific Statement Date pattern and Return immediately if found.
+
+  const explicitStatementYearRegex = /(?:statement|bill)\s*date\s*[:.]?\s*\d{1,2}\s+(?:[a-z]+)\s+(20\d{2})/i;
+  const explicitMatch = text.match(explicitStatementYearRegex);
+  if (explicitMatch) {
+    console.log('Found explicit statement year:', explicitMatch[1]);
+    return Number(explicitMatch[1]);
+  }
+
+  // Fallback to frequency/max if no explicit statement date found
+  // If we have mixed years (2025 and 2026), and we are in Jan 2026. 
+  // It's safer to pick the OLDER year as the "Base Year" for the statement items (usually previous month).
+  // But credit cards have "Payment Due" in future year.
+
+  const years = Array.from(yearCandidates).sort();
+  // If we have multiple years (e.g. 2025, 2026), return the earlier one (Statement) vs later one (Due Date)?
+  // Usually Statement Date <= Due Date.
+  if (years.length > 1) {
+    // Return the minimum year found (likely the statement year vs due date year)
+    return Math.min(...years);
+  }
+
+  return years[0];
 }
 
 /**

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { ImportReview, DuplicatePair } from '@/lib/types/transaction'
-import { getReviewData, confirmStatementImport, deleteStatement } from '@/app/actions/statements'
+import { getReviewData, confirmStatementImport, deleteStatement, saveDuplicateDecision } from '@/app/actions/statements'
 
 type DuplicateDecisions = Record<string, 'keep_existing' | 'add_new'>
 
@@ -51,11 +51,21 @@ export function useStatementReview(statementId: string): UseStatementReviewRetur
         fetchReview()
     }, [statementId])
 
-    const setDuplicateDecision = useCallback((importId: string, decision: 'keep_existing' | 'add_new') => {
+    const setDuplicateDecision = useCallback(async (importId: string, decision: 'keep_existing' | 'add_new') => {
+        // Optimistic update
         setDuplicateDecisions(prev => ({
             ...prev,
             [importId]: decision,
         }))
+
+        // Persist to server
+        try {
+            await saveDuplicateDecision(importId, decision === 'add_new' ? 'accept' : 'reject')
+        } catch (err) {
+            console.error("Failed to save decision", err)
+            // Revert on failure? Or just toast? 
+            // For now, logging is enough as it's a draft feature
+        }
     }, [])
 
     const confirm = useCallback(async (): Promise<boolean> => {

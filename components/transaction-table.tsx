@@ -63,9 +63,10 @@ export function TransactionTable({
                     <TableRow>
                         <TableHead className="w-[100px]">Date</TableHead>
                         <TableHead>Description</TableHead>
-                        <TableHead className="w-[300px]">Tags</TableHead>
+                        {/* Tags column removed */}
                         <TableHead className="text-right w-[120px]">Amount</TableHead>
                         {showSource && <TableHead className="w-[80px]">Source</TableHead>}
+                        <TableHead className="w-[50px]"></TableHead>
                     </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -73,9 +74,7 @@ export function TransactionTable({
                         <TransactionRow
                             key={transaction.id}
                             transaction={transaction}
-                            availableTags={availableTags}
                             showSource={showSource}
-                            enableTagging={enableTagging}
                             onUpdate={onTransactionUpdate}
                         />
                     ))}
@@ -92,28 +91,29 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { Eye, EyeOff } from 'lucide-react'
+import { MinusCircle } from 'lucide-react'
+import {
+    Tooltip,
+    TooltipContent,
+    TooltipProvider,
+    TooltipTrigger,
+} from "@/components/ui/tooltip"
 
 interface TransactionRowProps {
     transaction: Transaction
-    availableTags: Tag[]
     showSource: boolean
-    enableTagging: boolean
     onUpdate?: (silent?: boolean) => void
+    // Removed unused props: availableTags, enableTagging
 }
 
-function TransactionRow({ 
-    transaction, 
-    availableTags, 
-    showSource, 
-    enableTagging, 
-    onUpdate 
+function TransactionRow({
+    transaction,
+    showSource,
+    onUpdate
 }: TransactionRowProps) {
     const router = useRouter()
-    // Optimistic state
-    const [tags, setTags] = useState(transaction.tags)
-    const [localTags, setLocalTags] = useState<Tag[]>(availableTags)
 
+    // Optimistic state
     const [isUpdating, setIsUpdating] = useState(false)
     const [isPending, startTransition] = useTransition()
 
@@ -124,54 +124,27 @@ function TransactionRow({
 
     // Sync state when props change
     useEffect(() => {
-        setTags(transaction.tags)
         setIsExcluded(transaction.isExcluded)
         setExclusionReason(transaction.exclusionReason || '')
     }, [transaction])
-
-    useEffect(() => {
-        const newTags = availableTags.filter(at => !localTags.some(lt => lt.id === at.id))
-        if (newTags.length > 0) {
-            setLocalTags(prev => [...prev, ...newTags])
-        }
-    }, [availableTags])
-
-    const handleTagsChange = async (newTagIds: string[]) => {
-        setIsUpdating(true)
-        try {
-            await assignTagsToTransaction(transaction.id, newTagIds)
-            startTransition(() => {
-                router.refresh()
-            })
-            if (onUpdate) onUpdate(true) 
-            setIsUpdating(false)
-        } catch (error) {
-            console.error('Failed to update tags', error)
-            setIsUpdating(false)
-        }
-    }
 
     const handleToggleExclusion = async () => {
         const newExcludedState = !isExcluded
         // Optimistic update
         setIsExcluded(newExcludedState)
-        
+
         if (newExcludedState) {
-            // If turning ON, open popover to allow reason input (but generic reason isn't strictly required by DB)
+            // Must provide reason? Optional.
+            // Let's open popover to allow entering a reason if they want.
             setIsPopoverOpen(true)
         } else {
-             // If turning OFF, clear reason
+            // If turning OFF, clear reason
             setExclusionReason('')
         }
 
         try {
-            // We pass the current exclusionReason if enabling, but if enabling via toggle, maybe we wait for popover close?
-            // Actually, let's update immediately with empty reason, and update again if they type one?
-            // Or only update when they close popover / confirm?
-            // Better UX: Toggle immediately. If they type reason, it auto-saves or saves on blur.
-            
             await updateTransactionExclusion(transaction.id, newExcludedState, newExcludedState ? exclusionReason : undefined)
-            
+
             startTransition(() => {
                 router.refresh()
             })
@@ -187,8 +160,7 @@ function TransactionRow({
         setExclusionReason(newReason)
         try {
             await updateTransactionExclusion(transaction.id, true, newReason)
-            // No need to refresh entire list heavily for just reason text, but good for consistency
-             startTransition(() => {
+            startTransition(() => {
                 router.refresh()
             })
         } catch (error) {
@@ -213,23 +185,7 @@ function TransactionRow({
                     )}
                 </div>
             </TableCell>
-            <TableCell>
-                {enableTagging ? (
-                    <TagInput 
-                        selectedTags={tags}
-                        availableTags={localTags}
-                        onTagsChange={(tagIds) => handleTagsChange(tagIds)}
-                        isLoading={isUpdating || isPending}
-                        disabled={isExcluded} // Disable tagging if excluded? Maybe optional.
-                        onTagDelete={() => {
-                            router.refresh()
-                            if (onUpdate) onUpdate(true)
-                        }}
-                    />
-                ) : (
-                    <span className="text-muted-foreground text-sm italic">Import to tag</span>
-                )}
-            </TableCell>
+            {/* Tags Column removed */}
             <TableCell className={cn(
                 'text-right font-mono w-[120px]',
                 transaction.amount < 0 ? 'text-destructive' : '',
@@ -241,39 +197,42 @@ function TransactionRow({
                 <TableCell className="text-muted-foreground text-sm w-[80px]">
                     {transaction.statementId ? (
                         <Link href={`/transactions?statement=${transaction.statementId}`} className="hover:underline">
-                           {transaction.source}
+                            {transaction.source}
                         </Link>
                     ) : (
                         transaction.source
                     )}
                 </TableCell>
             )}
-             <TableCell className="w-[50px]">
+            <TableCell className="w-[50px]">
                 <Popover open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
                     <PopoverTrigger asChild>
-                        <Button 
-                            variant="ghost" 
-                            size="icon" 
-                            className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className={cn(
+                                "h-8 w-8 hover:text-destructive",
+                                isExcluded ? "text-destructive" : "text-muted-foreground/50"
+                            )}
                             onClick={(e) => {
-                                // Default behavior fits, but we want to intercept ONLY if we want to toggle.
-                                // PopoverTrigger usually toggles state.
-                                // We want the button to Toggle Exclusion. 
-                                // If it becomes Excluded, Show Popover.
-                                // If it is Excluded and we click, do we un-exclude? Or open popover?
-                                // Let's separate actions: Click Icon to Toggle. 
-                                // But PopoverTrigger wraps the button. 
-                                // Strategy: Button toggles. If excluded, meaningful generic "Settings" or explicit "Hidden" state.
-                                // Simplified: Just use the button to toggle. If ON, we manually open popover via state.
                                 e.stopPropagation()
                                 handleToggleExclusion()
                             }}
                         >
-                            {isExcluded ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4 opacity-25 hover:opacity-100" />}
+                            <TooltipProvider>
+                                <Tooltip>
+                                    <TooltipTrigger asChild>
+                                        <MinusCircle className="h-4 w-4" />
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                        <p>{isExcluded ? "Include in total" : "Exclude from total"}</p>
+                                    </TooltipContent>
+                                </Tooltip>
+                            </TooltipProvider>
                         </Button>
                     </PopoverTrigger>
                     {isExcluded && (
-                         <PopoverContent className="w-80" align="end" side="left">
+                        <PopoverContent className="w-80" align="end" side="left">
                             <div className="grid gap-4">
                                 <div className="space-y-2">
                                     <h4 className="font-medium leading-none">Exclude Transaction</h4>

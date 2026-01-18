@@ -1,6 +1,8 @@
 'use client'
 
 import { getTags } from '@/app/actions/tags'
+import { getPendingStatements } from '@/app/actions/statements'
+import { ReviewTabs } from './review-tabs'
 import { DuplicateComparison } from '@/components/duplicate-comparison'
 import { NavHeader } from '@/components/nav-header'
 import { TransactionTable } from '@/components/transaction-table'
@@ -30,9 +32,11 @@ export default function ReviewPage({ params }: ReviewPageProps) {
     const { statementId } = use(params)
     const router = useRouter()
     const [availableTags, setAvailableTags] = useState<Tag[]>([])
+    const [pendingStatements, setPendingStatements] = useState<any[]>([])
 
     useEffect(() => {
         getTags().then(setAvailableTags).catch((err) => console.error('Failed to fetch tags', err))
+        getPendingStatements().then(setPendingStatements).catch((err: unknown) => console.error('Failed to fetch pending', err))
     }, [])
 
     const {
@@ -50,7 +54,22 @@ export default function ReviewPage({ params }: ReviewPageProps) {
     const handleConfirm = async () => {
         const success = await confirmImport()
         if (success) {
-            router.push('/transactions?month=2025-12')
+            // Smart Redirect: Find next pending statement
+            // We need to refresh the pending list or check our local state
+            // Let's perform a fresh check to be sure
+            try {
+                const updatedPending = await getPendingStatements()
+                const nextStatement = updatedPending.find(s => s.id !== statementId)
+
+                if (nextStatement) {
+                    router.push(`/imports/${nextStatement.id}/review`)
+                } else {
+                    router.push('/transactions?month=2025-12')
+                }
+            } catch (e) {
+                // Fallback
+                router.push('/transactions?month=2025-12')
+            }
         }
     }
 
@@ -91,17 +110,26 @@ export default function ReviewPage({ params }: ReviewPageProps) {
 
             <main className="container py-8">
                 {/* Header */}
-                <div className="flex items-center gap-4 mb-8">
-                    <Button variant="ghost" size="sm" asChild>
-                        <Link href="/">
-                            <ArrowLeft className="h-4 w-4 mr-2" />
-                            Back
-                        </Link>
-                    </Button>
-                    <div>
-                        <h1 className="text-2xl font-bold">
-                            Review Import: {statement.bankName} — {formatDate(statement.periodStart).split(' ')[1]} {formatDate(statement.periodStart).split(' ')[2]}
-                        </h1>
+                <div className="flex flex-col gap-6 mb-8">
+                    <ReviewTabs
+                        currentStatementId={statementId}
+                        pendingStatements={pendingStatements}
+                    />
+
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <h1 className="text-2xl font-bold">
+                                Review Import: {statement.bankName}
+                            </h1>
+                            <p className="text-muted-foreground">
+                                {formatDate(statement.periodStart)} – {formatDate(statement.periodEnd)}
+                            </p>
+                        </div>
+                        <Button variant="ghost" size="sm" asChild>
+                            <Link href="/">
+                                Return to Dashboard
+                            </Link>
+                        </Button>
                     </div>
                 </div>
 
@@ -212,8 +240,8 @@ export default function ReviewPage({ params }: ReviewPageProps) {
 
                 {/* Footer Actions */}
                 <div className="flex items-center justify-between py-6 border-t">
-                    <Button 
-                        variant="destructive" 
+                    <Button
+                        variant="destructive"
                         onClick={async () => {
                             if (window.confirm('Are you sure you want to delete this import? This action cannot be undone.')) {
                                 const success = await reject()

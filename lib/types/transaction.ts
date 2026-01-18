@@ -40,6 +40,7 @@ export interface DuplicatePair {
     existing: Transaction
     new: Transaction
     importId: string
+    initialDecision?: 'keep_existing' | 'add_new'
 }
 
 export interface ImportReview {

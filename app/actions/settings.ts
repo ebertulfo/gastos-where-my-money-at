@@ -14,7 +14,10 @@ export async function getSettings() {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
 
-    if (!user) return null
+    if (!user) {
+        console.log('getSettings: No user found')
+        return null
+    }
 
     const { data, error } = await supabase
         .from('user_settings')
@@ -23,8 +26,14 @@ export async function getSettings() {
         .single()
 
     if (error && error.code !== 'PGRST116') { // PGRST116 is "No rows found"
-        console.error('Error fetching settings:', error)
+        console.error('getSettings: Error fetching settings:', error)
         return null
+    }
+
+    if (!data) {
+        console.log('getSettings: No settings found for user', user.id)
+    } else {
+        console.log('getSettings: Settings found', data)
     }
 
     return data as UserSettings | null
@@ -36,33 +45,21 @@ export async function updateSettings(input: { currency?: string }) {
 
     if (!user) throw new Error('Unauthorized')
 
-    // Check if exists first
-    const existing = await getSettings()
+    // Use Upsert for robustness
+    const { error: upsertError } = await (supabase
+        .from('user_settings' as any) as any)
+        .upsert({
+            user_id: user.id,
+            currency: input.currency || 'SGD',
+            updated_at: new Date().toISOString()
+        }, { onConflict: 'user_id' })
 
-    let error
-    if (existing) {
-        const { error: updateError } = await (supabase
-            .from('user_settings' as any) as any)
-            .update({
-                ...input,
-                updated_at: new Date().toISOString()
-            })
-            .eq('user_id', user.id)
-        error = updateError
-    } else {
-        const { error: insertError } = await (supabase
-            .from('user_settings' as any) as any)
-            .insert({
-                user_id: user.id,
-                currency: input.currency || 'SGD'
-            })
-        error = insertError
-    }
+    error = upsertError
 
     if (error) {
         console.error('Error updating settings:', error)
         throw new Error(error.message)
     }
 
-    revalidatePath('/')
+    revalidatePath('/upload')
 }

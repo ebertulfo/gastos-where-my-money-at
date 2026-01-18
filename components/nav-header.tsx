@@ -1,3 +1,4 @@
+import { signOut } from '@/app/actions/auth'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { BarChart3, FileText, Home, Receipt, Settings, User } from 'lucide-react'
@@ -8,7 +9,7 @@ export function NavHeader() {
         <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
             <div className="container flex h-14 items-center">
                 <div className="mr-4 flex">
-                    <Link href="/" className="mr-6 flex items-center space-x-2">
+                    <Link href="/upload" className="mr-6 flex items-center space-x-2">
                         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold">
                             G
                         </div>
@@ -16,7 +17,7 @@ export function NavHeader() {
                     </Link>
                     <nav className="flex items-center space-x-1 text-sm">
                         <Button variant="ghost" size="sm" asChild>
-                            <Link href="/" className="flex items-center gap-2">
+                            <Link href="/upload" className="flex items-center gap-2">
                                 <Home className="h-4 w-4" />
                                 Upload
                             </Link>
@@ -42,10 +43,15 @@ export function NavHeader() {
                     </nav>
                 </div>
                 <div className="flex flex-1 items-center justify-end space-x-2">
+                    <form action={signOut}>
+                        <Button variant="ghost" size="sm" type="submit">
+                            Logout
+                        </Button>
+                    </form>
+                    <Separator orientation="vertical" className="h-6" />
                     <Button variant="ghost" size="icon" disabled>
                         <Settings className="h-4 w-4" />
                     </Button>
-                    <Separator orientation="vertical" className="h-6" />
                     <Button variant="ghost" size="icon" disabled>
                         <User className="h-4 w-4" />
                     </Button>

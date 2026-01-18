@@ -1,119 +1,87 @@
-'use client'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import { ArrowRight, BarChart3, Lock, Upload } from 'lucide-react'
+import Link from 'next/link'
 
-import { getSettings } from '@/app/actions/settings'
-import { getRecentStatements } from '@/app/actions/statements'
-import { NavHeader } from '@/components/nav-header'
-import { OnboardingWizard } from '@/components/onboarding-wizard'
-import { StatementCard } from '@/components/statement-card'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Separator } from '@/components/ui/separator'
-import { UploadDropzone } from '@/components/upload-dropzone'
-import { UploadProgressList } from '@/components/upload-progress-list'
-import { useStatementUpload } from '@/lib/hooks/use-statement-upload'
-import type { Statement } from '@/lib/types/transaction'
-import { useRouter } from 'next/navigation'
-import { useCallback, useEffect, useState } from 'react'
+export default function LandingPage() {
+    return (
+        <div className="min-h-screen bg-background flex flex-col">
+            <header className="px-6 h-16 flex items-center border-b">
+                <div className="flex items-center gap-2 font-bold text-xl">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+                        G
+                    </div>
+                    Gastos
+                </div>
+                <div className="ml-auto">
+                    <Button variant="ghost" asChild>
+                        <Link href="/login">Log in</Link>
+                    </Button>
+                    <Button asChild className="ml-4">
+                        <Link href="/login">Get Started</Link>
+                    </Button>
+                </div>
+            </header>
 
-export default function HomePage() {
-  const router = useRouter()
-  const { upload, uploads, isUploading, reset } = useStatementUpload()
-  const [uploadedFileName, setUploadedFileName] = useState<string>('')
-  const [recentImports, setRecentImports] = useState<Statement[]>([])
-  const [isLoadingHistory, setIsLoadingHistory] = useState(true)
-  const [showOnboarding, setShowOnboarding] = useState(false)
+            <main className="flex-1">
+                {/* Hero Section */}
+                <section className="py-24 px-6 text-center animate-fade-in">
+                    <h1 className="text-5xl md:text-7xl font-bold tracking-tight mb-6 bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
+                        Unfuck your finances.
+                    </h1>
+                    <p className="text-xl text-muted-foreground max-w-2xl mx-auto mb-10">
+                        Stop wondering where your money went. Upload your bank statements, categorize automatically, and get clear actionable insights.
+                    </p>
+                    <Button size="lg" className="h-12 px-8 text-lg" asChild>
+                        <Link href="/login">
+                            Start for free <ArrowRight className="ml-2 h-5 w-5" />
+                        </Link>
+                    </Button>
+                </section>
 
-  const handleFileSelect = useCallback(async (files: File[]) => {
-    if (files.length > 0) {
-        setUploadedFileName(files.map(f => f.name).join(', '))
-        await upload(files)
-        // Refresh history after upload (optional, usually redirect handles flow)
-    }
-  }, [upload])
-  
-  useEffect(() => {
-      async function init() {
-          try {
-              // Parallel fetch history and settings
-              const [data, settings] = await Promise.all([
-                  getRecentStatements(),
-                  getSettings()
-              ])
-              setRecentImports(data)
-              
-              // If no settings, trigger onboarding
-              if (!settings) {
-                  setShowOnboarding(true)
-              }
-          } catch (e) {
-              console.error("Failed to load data", e)
-          } finally {
-              setIsLoadingHistory(false)
-          }
-      }
-      init()
-  }, [])
+                {/* Features Grid */}
+                <section className="py-12 px-6 bg-muted/30">
+                    <div className="container max-w-6xl mx-auto grid md:grid-cols-3 gap-8">
+                        <Card className="border-none shadow-none bg-background/50">
+                            <CardContent className="pt-6">
+                                <div className="h-12 w-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4 text-primary">
+                                    <Upload className="h-6 w-6" />
+                                </div>
+                                <h3 className="text-xl font-bold mb-2">Statement Upload</h3>
+                                <p className="text-muted-foreground">
+                                    Drag and drop PDF statements from major banks. We parse them securely in seconds.
+                                </p>
+                            </CardContent>
+                        </Card>
+                        <Card className="border-none shadow-none bg-background/50">
+                            <CardContent className="pt-6">
+                                <div className="h-12 w-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4 text-primary">
+                                    <Lock className="h-6 w-6" />
+                                </div>
+                                <h3 className="text-xl font-bold mb-2">Private & Secure</h3>
+                                <p className="text-muted-foreground">
+                                    Your data belongs to you. We use Row Level Security to ensure only you can see your finances.
+                                </p>
+                            </CardContent>
+                        </Card>
+                        <Card className="border-none shadow-none bg-background/50">
+                            <CardContent className="pt-6">
+                                <div className="h-12 w-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4 text-primary">
+                                    <BarChart3 className="h-6 w-6" />
+                                </div>
+                                <h3 className="text-xl font-bold mb-2">Clear Insights</h3>
+                                <p className="text-muted-foreground">
+                                    Visualize your spending habits with intuitive charts and categorization.
+                                </p>
+                            </CardContent>
+                        </Card>
+                    </div>
+                </section>
+            </main>
 
-  const showParsingProgress = isUploading || uploads.length > 0
-
-  return (
-    <div className="min-h-screen bg-background">
-      <NavHeader />
-      <OnboardingWizard open={showOnboarding} />
-
-      <main className="container py-8 md:py-12">
-        {/* ... existing content ... */}
-        <div className="text-center mb-10 animate-fade-in">
-          <h1 className="text-4xl md:text-5xl font-bold tracking-tight mb-4">
-            Unfuck your finances.
-          </h1>
-          <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-            Upload your bank statements and see where your household money really goes.
-          </p>
+            <footer className="py-8 text-center text-sm text-muted-foreground border-t">
+                <p>&copy; {new Date().getFullYear()} Gastos. All rights reserved.</p>
+            </footer>
         </div>
-
-        {/* Upload Section */}
-        <div className="max-w-2xl mx-auto mb-12">
-          {showParsingProgress ? (
-             <UploadProgressList 
-               uploads={uploads} 
-               className="animate-slide-up"
-             />
-          ) : (
-            <UploadDropzone
-              onFileSelect={handleFileSelect}
-              isUploading={isUploading}
-              className="animate-slide-up"
-            />
-          )}
-        </div>
-
-        <Separator className="my-8" />
-
-        {/* Recent Imports Section */}
-        <div className="max-w-3xl mx-auto">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">Recent Imports</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {isLoadingHistory ? (
-                  <p className="text-muted-foreground text-center py-6">Loading history...</p>
-              ) : recentImports.length === 0 ? (
-                <p className="text-muted-foreground text-center py-6">
-                  No statements imported yet. Upload your first one above.
-                </p>
-              ) : (
-                recentImports.map((stmt) => (
-                  <StatementCard
-                    key={stmt.id}
-                    {...stmt}
-                  />
-                ))
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      </main>
-    </div>
-  )
+    )
 }

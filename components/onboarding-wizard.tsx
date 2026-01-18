@@ -40,9 +40,10 @@ type Step = 'welcome' | 'region' | 'tags' | 'success'
 
 interface OnboardingWizardProps {
     open: boolean
+    onFinish?: () => void
 }
 
-export function OnboardingWizard({ open }: OnboardingWizardProps) {
+export function OnboardingWizard({ open, onFinish }: OnboardingWizardProps) {
     const router = useRouter()
     const [step, setStep] = React.useState<Step>('welcome')
     const [selectedCountry, setSelectedCountry] = React.useState<string>('SG')
@@ -74,6 +75,7 @@ export function OnboardingWizard({ open }: OnboardingWizardProps) {
     }
 
     const handleFinish = () => {
+        onFinish?.()
         router.refresh()
     }
 
@@ -135,9 +137,9 @@ export function OnboardingWizard({ open }: OnboardingWizardProps) {
                                 We can set up a standard list of categories for you (Food, Transport, Utilities, etc.)
                             </DialogDescription>
                         </DialogHeader>
-                        
+
                         <div className="py-6 space-y-4">
-                            <div 
+                            <div
                                 className={cn(
                                     "border rounded-lg p-4 cursor-pointer transition-colors relative",
                                     useDefaultTags ? "border-primary bg-primary/5" : "hover:bg-muted"
@@ -153,7 +155,7 @@ export function OnboardingWizard({ open }: OnboardingWizardProps) {
                                 </p>
                             </div>
 
-                            <div 
+                            <div
                                 className={cn(
                                     "border rounded-lg p-4 cursor-pointer transition-colors relative",
                                     !useDefaultTags ? "border-primary bg-primary/5" : "hover:bg-muted"

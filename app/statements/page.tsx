@@ -18,7 +18,7 @@ export default async function StatementsPage() {
                 <div className="flex items-center justify-between mb-8">
                     <h1 className="text-2xl font-bold">Statements</h1>
                     <Button asChild>
-                        <Link href="/">
+                        <Link href="/upload">
                             <FileUp className="h-4 w-4 mr-2" />
                             Upload New
                         </Link>
@@ -37,7 +37,7 @@ export default async function StatementsPage() {
                             Upload your bank statements to start tracking your expenses automatically.
                         </p>
                         <Button asChild>
-                            <Link href="/">Upload Statement</Link>
+                            <Link href="/upload">Upload Statement</Link>
                         </Button>
                     </div>
                 ) : (

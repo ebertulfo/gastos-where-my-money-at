@@ -57,7 +57,7 @@ export default function SummaryPage() {
 
                         <div className="flex flex-col sm:flex-row gap-3 justify-center">
                             <Button asChild>
-                                <Link href="/">
+                                <Link href="/upload">
                                     Upload a statement
                                     <ArrowRight className="h-4 w-4 ml-2" />
                                 </Link>
