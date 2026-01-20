@@ -1,3 +1,5 @@
+'use client'
+
 import { assignTagsToTransaction } from '@/app/actions/tags'
 import {
     Table,
@@ -63,7 +65,7 @@ export function TransactionTable({
                     <TableRow>
                         <TableHead className="w-[100px]">Date</TableHead>
                         <TableHead>Description</TableHead>
-                        {/* Tags column removed */}
+                        {enableTagging && <TableHead>Tags</TableHead>}
                         <TableHead className="text-right w-[120px]">Amount</TableHead>
                         {showSource && <TableHead className="w-[80px]">Source</TableHead>}
                         <TableHead className="w-[50px]"></TableHead>
@@ -76,6 +78,8 @@ export function TransactionTable({
                             transaction={transaction}
                             showSource={showSource}
                             onUpdate={onTransactionUpdate}
+                            enableTagging={enableTagging}
+                            availableTags={availableTags}
                         />
                     ))}
                 </TableBody>
@@ -103,13 +107,16 @@ interface TransactionRowProps {
     transaction: Transaction
     showSource: boolean
     onUpdate?: (silent?: boolean) => void
-    // Removed unused props: availableTags, enableTagging
+    enableTagging: boolean
+    availableTags: Tag[]
 }
 
 function TransactionRow({
     transaction,
     showSource,
-    onUpdate
+    onUpdate,
+    enableTagging,
+    availableTags
 }: TransactionRowProps) {
     const router = useRouter()
 
@@ -185,7 +192,23 @@ function TransactionRow({
                     )}
                 </div>
             </TableCell>
-            {/* Tags Column removed */}
+            {enableTagging && (
+                <TableCell className="w-[200px]">
+                    <TagInput
+                        selectedTags={transaction.tags}
+                        availableTags={availableTags}
+                        onTagsChange={async (newTagIds) => {
+                            try {
+                                const { assignTagsToTransaction } = await import('@/app/actions/tags')
+                                await assignTagsToTransaction(transaction.id, newTagIds)
+                                if (onUpdate) onUpdate(true)
+                            } catch (e) {
+                                console.error("Failed to update tags", e)
+                            }
+                        }}
+                    />
+                </TableCell>
+            )}
             <TableCell className={cn(
                 'text-right font-mono w-[120px]',
                 transaction.amount < 0 ? 'text-destructive' : '',

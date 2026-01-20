@@ -3,7 +3,7 @@
 import { getTags } from '@/app/actions/tags'
 import { getPendingStatements } from '@/app/actions/statements'
 import { ReviewTabs } from './review-tabs'
-import { DuplicateComparison } from '@/components/duplicate-comparison'
+
 import { NavHeader } from '@/components/nav-header'
 import { TransactionTable } from '@/components/transaction-table'
 import {
@@ -102,7 +102,7 @@ export default function ReviewPage({ params }: ReviewPageProps) {
         )
     }
 
-    const { statement, newTransactions, duplicates } = review
+    const { statement, newTransactions } = review
 
     return (
         <div className="min-h-screen bg-background">
@@ -169,12 +169,6 @@ export default function ReviewPage({ params }: ReviewPageProps) {
                                     New: {newTransactions.length}
                                 </Badge>
                             </div>
-                            <div className="flex items-center gap-2">
-                                <Badge variant="secondary">
-                                    <AlertTriangle className="h-3 w-3 mr-1" />
-                                    Possible duplicates: {duplicates.length}
-                                </Badge>
-                            </div>
                         </div>
                     </CardContent>
                 </Card>
@@ -201,42 +195,7 @@ export default function ReviewPage({ params }: ReviewPageProps) {
                     </CardContent>
                 </Card>
 
-                {/* Section B: Potential Duplicates */}
-                {duplicates.length > 0 && (
-                    <Card className="mb-8 animate-slide-up">
-                        <CardHeader>
-                            <CardTitle className="flex items-center gap-2">
-                                <AlertTriangle className="h-5 w-5 text-warning" />
-                                Potential Duplicates
-                            </CardTitle>
-                            <p className="text-sm text-muted-foreground">
-                                {duplicates.length} transactions look like they may already exist.
-                                We'll keep your existing ones by default.
-                            </p>
-                        </CardHeader>
-                        <CardContent>
-                            <Accordion type="single" collapsible defaultValue="duplicates">
-                                <AccordionItem value="duplicates" className="border-none">
-                                    <AccordionTrigger className="py-2">
-                                        Show {duplicates.length} potential duplicates
-                                    </AccordionTrigger>
-                                    <AccordionContent>
-                                        <div className="space-y-4 pt-4">
-                                            {duplicates.map((dup) => (
-                                                <DuplicateComparison
-                                                    key={dup.importId}
-                                                    duplicate={dup}
-                                                    decision={duplicateDecisions[dup.importId] || 'keep_existing'}
-                                                    onDecisionChange={(decision) => setDuplicateDecision(dup.importId, decision)}
-                                                />
-                                            ))}
-                                        </div>
-                                    </AccordionContent>
-                                </AccordionItem>
-                            </Accordion>
-                        </CardContent>
-                    </Card>
-                )}
+
 
                 {/* Footer Actions */}
                 <div className="flex items-center justify-between py-6 border-t">

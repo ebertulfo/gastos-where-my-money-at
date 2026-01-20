@@ -54,11 +54,9 @@ export async function updateSettings(input: { currency?: string }) {
             updated_at: new Date().toISOString()
         }, { onConflict: 'user_id' })
 
-    error = upsertError
-
-    if (error) {
-        console.error('Error updating settings:', error)
-        throw new Error(error.message)
+    if (upsertError) {
+        console.error('Error updating settings:', upsertError)
+        throw new Error(upsertError.message)
     }
 
     revalidatePath('/upload')

@@ -9,30 +9,30 @@ import { formatDate } from '@/lib/utils'
 function mapDBTransaction(t: any): Transaction {
   const bankName = t.statements?.bank || 'Unknown'
   const period = t.statements?.period_start ? `(${formatDate(t.statements.period_start).split(' ')[1]} ${formatDate(t.statements.period_start).split(' ')[2]})` : ''
-  
+
   let sourceLabel = `${bankName} ${period}`
   if (bankName === 'Unknown' && t.statements?.source_file_name) {
-      sourceLabel = t.statements.source_file_name
+    sourceLabel = t.statements.source_file_name
   }
   if (!t.statements) {
-      sourceLabel = 'Usage'
+    sourceLabel = 'Usage'
   }
 
   // Map tags from the junction table structure
   // The query returns transaction_tags(tags(...))
   const tags = t.transaction_tags?.map((tt: any) => ({
-      id: tt.tags.id,
-      name: tt.tags.name,
-      color: tt.tags.color
+    id: tt.tags.id,
+    name: tt.tags.name,
+    color: tt.tags.color
   })) || []
-  
+
   return {
     id: t.id,
     date: t.date,
     description: t.description,
     amount: t.amount,
     currency: 'SGD',
-    source: sourceLabel, 
+    source: sourceLabel,
     monthBucket: t.month_bucket,
     transactionIdentifier: t.transaction_identifier,
     statementId: t.statement_id,
@@ -46,7 +46,7 @@ function mapDBTransaction(t: any): Transaction {
 
 export async function getTransactions(month?: string | null, statementId?: string): Promise<Transaction[]> {
   const supabase = await createClient()
-  
+
   let query = (supabase as any)
     .from('transactions')
     .select(`
@@ -62,9 +62,9 @@ export async function getTransactions(month?: string | null, statementId?: strin
   if (month) {
     query = query.eq('month_bucket', month)
   }
-  
+
   if (statementId) {
-      query = query.eq('statement_id', statementId)
+    query = query.eq('statement_id', statementId)
   }
 
   const { data, error } = await query
@@ -79,14 +79,14 @@ export async function getTransactions(month?: string | null, statementId?: strin
 
 export async function getAvailableMonthsList(): Promise<string[]> {
   const supabase = await createClient()
-  
+
   // Supabase/Postgrest doesn't support SELECT DISTINCT ON (col) cleanly via JS client for just a list of strings
   // But we can fetch distinct month_buckets.
   const { data, error } = await (supabase as any)
     .from('transactions')
     .select('month_bucket')
-    //.distinct() // distinct() might not work as expected in all Supabase versions/calls without checking docs, but usually valid
-  
+  //.distinct() // distinct() might not work as expected in all Supabase versions/calls without checking docs, but usually valid
+
   if (error) {
     console.error('Error fetching months:', error)
     return []
@@ -99,20 +99,20 @@ export async function getAvailableMonthsList(): Promise<string[]> {
 
 export async function getMonthSummary(month: string | null, statementId?: string): Promise<MonthSummary> {
   const supabase = await createClient()
-  
+
   let query = (supabase as any)
     .from('transactions')
     .select('amount, statement_id, is_excluded')
     .eq('status', 'active')
 
   if (month) {
-      query = query.eq('month_bucket', month)
+    query = query.eq('month_bucket', month)
   }
-  
+
   if (statementId) {
-      query = query.eq('statement_id', statementId)
+    query = query.eq('statement_id', statementId)
   }
-  
+
   const { data, error } = await query
 
   if (error) {
@@ -120,7 +120,7 @@ export async function getMonthSummary(month: string | null, statementId?: string
   }
 
   const transactions = data as { amount: number; statement_id: string; is_excluded: boolean }[]
-  
+
   const totalSpent = transactions
     .filter(t => t.amount > 0 && !t.is_excluded) // Exclude marked transactions and ensuring positive amounts
     .reduce((sum, t) => sum + t.amount, 0)
@@ -138,53 +138,67 @@ export async function getMonthSummary(month: string | null, statementId?: string
 
 export async function updateTransactionExclusion(id: string, isExcluded: boolean, reason?: string) {
   const supabase = await createClient()
-  
-  const { error } = await (supabase.from('transactions') as any)
-    .update({ 
-        is_excluded: isExcluded,
-        exclusion_reason: isExcluded ? reason : null 
+
+  // 1. Try updating transactions table
+  const { error: txError, count } = await (supabase.from('transactions') as any)
+    .update({
+      is_excluded: isExcluded,
+      exclusion_reason: isExcluded ? reason : null
     })
     .eq('id', id)
-    
-  if (error) {
-    console.error('Failed to update transaction exclusion:', error)
-    throw new Error('Failed to update transaction')
+    .select('id', { count: 'exact', head: true }) // Check if any row as updated
+
+  if (!txError && count && count > 0) {
+    return { success: true }
   }
-  
+
+  // 2. If no transaction updated, try transaction_imports
+  const { error: impError } = await (supabase.from('transaction_imports') as any)
+    .update({
+      is_excluded: isExcluded,
+      exclusion_reason: isExcluded ? reason : null
+    })
+    .eq('id', id)
+
+  if (impError) {
+    console.error('Failed to update transaction/import exclusion:', impError)
+    throw new Error('Failed to update exclusion')
+  }
+
   return { success: true }
 }
 
 export async function getStatementsForMonth(month: string): Promise<{ id: string; label: string }[]> {
   const supabase = await createClient()
-  
+
   // Get distinct statement IDs for the month
   const { data, error } = await (supabase as any)
     .from('transactions')
     .select('statement_id, statements(id, bank, period_start, source_file_name)')
     .eq('month_bucket', month)
     .eq('status', 'active')
-    
+
   if (error) {
-      console.error('Error fetching statements for month:', error)
-      return []
+    console.error('Error fetching statements for month:', error)
+    return []
   }
-  
+
   // Deduplicate and map
   const uniqueStatements = new Map<string, string>()
-  
+
   data.forEach((t: any) => {
-      if (t.statements) {
-          const bank = t.statements.bank || 'Unknown' 
-          const period = t.statements.period_start ? `(${formatDate(t.statements.period_start).split(' ')[1]} ${formatDate(t.statements.period_start).split(' ')[2]})` : ''
-          
-          let label = `${bank} ${period}`
-          if (bank === 'Unknown' && t.statements.source_file_name) {
-              label = t.statements.source_file_name
-          }
-          
-          uniqueStatements.set(t.statements.id, label)
+    if (t.statements) {
+      const bank = t.statements.bank || 'Unknown'
+      const period = t.statements.period_start ? `(${formatDate(t.statements.period_start).split(' ')[1]} ${formatDate(t.statements.period_start).split(' ')[2]})` : ''
+
+      let label = `${bank} ${period}`
+      if (bank === 'Unknown' && t.statements.source_file_name) {
+        label = t.statements.source_file_name
       }
+
+      uniqueStatements.set(t.statements.id, label)
+    }
   })
-  
+
   return Array.from(uniqueStatements.entries()).map(([id, label]) => ({ id, label }))
 }

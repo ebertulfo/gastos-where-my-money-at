@@ -18,7 +18,7 @@ create type transaction_status as enum ('active', 'voided');
 
 -- Statements table
 create table statements (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   source_file_name text not null,
   source_file_sha256 text not null,
   bank text,
@@ -41,7 +41,7 @@ create unique index statements_user_file_hash_idx on statements (uploaded_by, so
 
 -- Transactions table
 create table transactions (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   user_id uuid not null,
   statement_id uuid not null references statements(id) on delete cascade,
   transaction_identifier text not null,
@@ -71,7 +71,7 @@ create index transactions_date_idx on transactions (user_id, date desc);
 
 -- Transaction imports (staging table for current upload)
 create table transaction_imports (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   statement_id uuid not null references statements(id) on delete cascade,
   transaction_identifier text not null,
   date date not null,

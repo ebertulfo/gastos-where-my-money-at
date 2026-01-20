@@ -5,7 +5,7 @@ import { ImportReview, DuplicatePair, ImportDecisions, Transaction, Statement as
 import { Database } from '@/lib/supabase/database.types'
 
 type DBTransaction = Database['public']['Tables']['transactions']['Row']
-type DBImport = Database['public']['Tables']['transaction_imports']['Row']
+type DBImport = Database['public']['Tables']['transaction_imports']['Row'] & { is_excluded?: boolean, exclusion_reason?: string | null }
 type DBStatement = Database['public']['Tables']['statements']['Row']
 
 function mapDBTransaction(t: DBTransaction): Transaction {
@@ -37,8 +37,8 @@ function mapImportToTransaction(t: DBImport, currency: string): Transaction {
     monthBucket: t.month_bucket,
     transactionIdentifier: t.transaction_identifier,
     statementId: t.statement_id,
-    isExcluded: false,
-    exclusionReason: undefined,
+    isExcluded: t.is_excluded || false,
+    exclusionReason: t.exclusion_reason || undefined,
     tags: [],
     createdAt: t.created_at,
   }
@@ -77,43 +77,15 @@ export async function getReviewData(statementId: string): Promise<ImportReview> 
   const newImports = imports.filter(i => !i.existing_transaction_id)
   const duplicateImports = imports.filter(i => i.existing_transaction_id)
 
-  // 4. Fetch existing transactions for duplicates
-  let duplicates: DuplicatePair[] = []
+  // 4. Skip fetching existing duplicates as we don't show them anymore
+  const duplicates: DuplicatePair[] = [] // Empty list for spec 6
 
+  // Previous logic commented out for reference or if we revert
+  /*
   if (duplicateImports.length > 0) {
-    const existingIds = duplicateImports.map(i => i.existing_transaction_id!) // Validated by filter
-    const { data: existingTransactionsData, error: existingError } = await (supabase as any)
-      .from('transactions')
-      .select('*')
-      .in('id', existingIds)
-
-    if (existingError) {
-      throw new Error(`Failed to fetch existing transactions: ${existingError.message}`)
-    }
-
-    const existingTransactions = existingTransactionsData as DBTransaction[]
-
-    // Map to DuplicatePair
-    duplicates = duplicateImports.map(imp => {
-      const existing = existingTransactions?.find(t => t.id === imp.existing_transaction_id)
-      if (!existing) return null // Should not happen if referential integrity holds
-
-      // Check for saved draft decision
-      let draftDecision: 'keep_existing' | 'add_new' = 'keep_existing' // default
-      if (imp.notes && imp.notes.startsWith('DRAFT:')) {
-        const action = imp.notes.split(':')[1]
-        if (action === 'accept') draftDecision = 'add_new'
-        else if (action === 'reject') draftDecision = 'keep_existing'
-      }
-
-      return {
-        importId: imp.id,
-        new: mapImportToTransaction(imp, statement.currency || 'SGD'),
-        existing: mapDBTransaction(existing),
-        initialDecision: draftDecision,
-      }
-    }).filter((d) => d !== null) as DuplicatePair[]
+     ...
   }
+  */
 
   const uiStatement: UIStatement = {
     id: statement.id,
@@ -202,6 +174,8 @@ export async function confirmStatementImport(statementId: string, decisions: Imp
         statement_page: imp.statement_page,
         line_number: imp.line_number,
         status: 'active',
+        is_excluded: imp.is_excluded,
+        exclusion_reason: imp.exclusion_reason,
       })
     }
   }
