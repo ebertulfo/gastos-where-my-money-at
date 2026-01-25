@@ -33,6 +33,7 @@ export function useTransactions(initialMonth?: string): UseTransactionsReturn {
     const searchParams = useSearchParams()
     const statementId = searchParams.get('statement')
 
+
     // Fetch available months and tags on mount
     useEffect(() => {
         async function init() {
@@ -45,10 +46,10 @@ export function useTransactions(initialMonth?: string): UseTransactionsReturn {
                 setAvailableTags(tags)
 
                 // Auto-select first month if none selected and not viewing specific statement
-                if (!selectedMonth && months.length > 0 && !statementId) {
-                    setSelectedMonth(months[0])
+                // We use a functional update or ref if we want to avoid dep cycles, but checking initial state here is safe enough for mount effect
+                if (!initialMonth && !statementId && months.length > 0) {
+                     setSelectedMonth(months[0])
                 } else if (months.length === 0) {
-                    // No data available, stop loading
                     setIsLoading(false)
                 }
             } catch (err) {
@@ -59,7 +60,9 @@ export function useTransactions(initialMonth?: string): UseTransactionsReturn {
         }
 
         init()
-    }, [selectedMonth, statementId])
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []) // Empty dependency array to run only once
+
 
     // Load available statements when month changes
     useEffect(() => {
