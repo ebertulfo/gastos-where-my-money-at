@@ -1,6 +1,5 @@
 'use client'
 
-import { assignTagsToTransaction } from '@/app/actions/tags'
 import {
     Table,
     TableBody,
@@ -24,6 +23,7 @@ interface TransactionTableProps {
     emptyMessage?: string
     onTransactionUpdate?: (silent?: boolean) => void
     enableTagging?: boolean
+    onTagChangeOverride?: (transactionId: string, newTagIds: string[]) => Promise<void>
 }
 
 export function TransactionTable({
@@ -34,6 +34,7 @@ export function TransactionTable({
     emptyMessage = 'No transactions to display.',
     onTransactionUpdate,
     enableTagging = true,
+    onTagChangeOverride
 }: TransactionTableProps) {
     if (transactions.length === 0) {
         return (
@@ -44,19 +45,6 @@ export function TransactionTable({
     }
 
     const router = useRouter()
-
-    const handleTagsChange = async (transactionId: string, newTagIds: string[]) => {
-        try {
-            await assignTagsToTransaction(transactionId, newTagIds)
-            router.refresh() // Refetch server components
-            if (onTransactionUpdate) {
-                onTransactionUpdate(true) // Trigger manual refetch for client components (silent)
-            }
-        } catch (error) {
-            console.error('Failed to update tags', error)
-            // Ideally show toast
-        }
-    }
 
     return (
         <div className={cn('rounded-lg border', className)}>
@@ -80,6 +68,7 @@ export function TransactionTable({
                             onUpdate={onTransactionUpdate}
                             enableTagging={enableTagging}
                             availableTags={availableTags}
+                            onTagChangeOverride={onTagChangeOverride}
                         />
                     ))}
                 </TableBody>
@@ -95,13 +84,13 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { MinusCircle } from 'lucide-react'
 import {
     Tooltip,
     TooltipContent,
     TooltipProvider,
     TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { MinusCircle } from 'lucide-react'
 
 interface TransactionRowProps {
     transaction: Transaction
@@ -109,6 +98,7 @@ interface TransactionRowProps {
     onUpdate?: (silent?: boolean) => void
     enableTagging: boolean
     availableTags: Tag[]
+    onTagChangeOverride?: (transactionId: string, newTagIds: string[]) => Promise<void>
 }
 
 function TransactionRow({
@@ -116,7 +106,8 @@ function TransactionRow({
     showSource,
     onUpdate,
     enableTagging,
-    availableTags
+    availableTags,
+    onTagChangeOverride
 }: TransactionRowProps) {
     const router = useRouter()
 
@@ -198,6 +189,11 @@ function TransactionRow({
                         selectedTags={transaction.tags}
                         availableTags={availableTags}
                         onTagsChange={async (newTagIds) => {
+                            if (onTagChangeOverride) {
+                                await onTagChangeOverride(transaction.id, newTagIds)
+                                return 
+                            }
+                            
                             try {
                                 const { assignTagsToTransaction } = await import('@/app/actions/tags')
                                 await assignTagsToTransaction(transaction.id, newTagIds)

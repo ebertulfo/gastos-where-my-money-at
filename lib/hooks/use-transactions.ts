@@ -6,6 +6,7 @@ import type { Transaction, MonthSummary } from '@/lib/types/transaction'
 import type { Tag } from '@/lib/supabase/database.types'
 import { getTransactions, getMonthSummary, getAvailableMonthsList, getStatementsForMonth } from '@/app/actions/transactions'
 import { getTags } from '@/app/actions/tags'
+import { refreshTransactionData } from '@/app/actions/composite'
 
 interface UseTransactionsReturn {
     transactions: Transaction[]
@@ -86,15 +87,11 @@ export function useTransactions(initialMonth?: string): UseTransactionsReturn {
         setError(null)
 
         try {
-            const [txns, monthSummary, tags] = await Promise.all([
-                getTransactions(selectedMonth, statementId || undefined),
-                getMonthSummary(selectedMonth, statementId || undefined),
-                getTags() // Always refresh tags to stay in sync with deletions
-            ])
+            const data = await refreshTransactionData(selectedMonth, statementId || undefined)
 
-            setTransactions(txns)
-            setSummary(monthSummary)
-            setAvailableTags(tags) 
+            setTransactions(data.transactions)
+            setSummary(data.summary)
+            setAvailableTags(data.tags)
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to load transactions')
         } finally {
