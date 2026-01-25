@@ -32,22 +32,18 @@ export function useStatementUpload(): UseStatementUploadReturn {
     const upload = useCallback(async (files: File[]) => {
         setIsUploading(true)
 
-        // Check for session and sign in anonymously if needed
+        // Check for session
         const { data: { session } } = await supabase.auth.getSession()
         if (!session) {
-            const { error: signInError } = await supabase.auth.signInAnonymously()
-            if (signInError) {
-                console.error("Anonymous sign-in failed:", signInError)
-                setUploads(prev => [...prev, ...files.map(f => ({
-                    id: Math.random().toString(36).substring(7),
-                    file: f,
-                    status: 'error' as const,
-                    progress: 0,
-                    error: "Could not sign in. Please try again."
-                }))])
-                setIsUploading(false)
-                return
-            }
+            setUploads(prev => [...prev, ...files.map(f => ({
+                id: Math.random().toString(36).substring(7),
+                file: f,
+                status: 'error' as const,
+                progress: 0,
+                error: "You must be logged in to upload statements."
+            }))])
+            setIsUploading(false)
+            return
         }
         
         // Initialize state for new files
