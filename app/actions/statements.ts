@@ -2,8 +2,21 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
-import { ImportReview, DuplicatePair, ImportDecisions, Transaction, Statement as UIStatement } from '@/lib/types/transaction'
+import { ImportReview, DuplicatePair, ImportDecisions, ImportSuggestion, Transaction, Statement as UIStatement } from '@/lib/types/transaction'
 import { Database } from '@/lib/supabase/database.types'
+
+type DBImportWithAI = Database['public']['Tables']['transaction_imports']['Row'] & {
+  is_excluded?: boolean
+  exclusion_reason?: string | null
+  suggested_tag_ids?: string[]
+  ai_suggestion_status?: ImportSuggestion['status']
+}
+
+export interface SuggestionDecision {
+  importId: string
+  acceptedTagIds: string[]
+  primaryTagId?: string
+}
 
 type DBTransaction = Database['public']['Tables']['transactions']['Row']
 type DBImport = Database['public']['Tables']['transaction_imports']['Row'] & { is_excluded?: boolean, exclusion_reason?: string | null }
@@ -115,21 +128,50 @@ export async function getReviewData(statementId: string): Promise<ImportReview> 
   // 4. Skip fetching existing duplicates as we don't show them anymore
   const duplicates: DuplicatePair[] = [] // Empty list for spec 6
 
-  // Previous logic commented out for reference or if we revert
-  /*
-  if (duplicateImports.length > 0) {
-     ...
-  }
-  */
+  // 5. Surface AI suggestions per import so the review UI can render
+  // dashed-outline pills (and poll for status='pending' rows).
+  const importsWithAI = imports as DBImportWithAI[]
+  const suggestions: ImportSuggestion[] = importsWithAI.map(i => ({
+    importId: i.id,
+    suggestedTagIds: i.suggested_tag_ids ?? [],
+    status: (i.ai_suggestion_status as ImportSuggestion['status']) ?? 'pending',
+  }))
 
   return {
     statement: mapDBStatementToUI(statement, imports.length),
     newTransactions: newImports.map(i => mapImportToTransaction(i, statement.currency || 'SGD')),
     duplicates,
+    suggestions,
   }
 }
 
-export async function confirmStatementImport(statementId: string, decisions: ImportDecisions['decisions']): Promise<{ success: boolean; error?: string; targetMonth?: string }> {
+/**
+ * Polled by the review screen while any row is `ai_suggestion_status='pending'`.
+ * Returns the same shape as ImportReview.suggestions.
+ */
+export async function getSuggestionsForStatement(statementId: string): Promise<ImportSuggestion[]> {
+  const supabase = await createClient()
+
+  const { data, error } = await (supabase as any)
+    .from('transaction_imports')
+    .select('id, suggested_tag_ids, ai_suggestion_status')
+    .eq('statement_id', statementId)
+    .eq('resolution', 'pending')
+
+  if (error || !data) return []
+
+  return (data as DBImportWithAI[]).map(i => ({
+    importId: i.id,
+    suggestedTagIds: i.suggested_tag_ids ?? [],
+    status: (i.ai_suggestion_status as ImportSuggestion['status']) ?? 'pending',
+  }))
+}
+
+export async function confirmStatementImport(
+  statementId: string,
+  decisions: ImportDecisions['decisions'],
+  suggestionDecisions: SuggestionDecision[] = [],
+): Promise<{ success: boolean; error?: string; targetMonth?: string }> {
   const supabase = await createClient()
 
   // 1. Fetch all pending imports for this statement
@@ -206,6 +248,13 @@ export async function confirmStatementImport(statementId: string, decisions: Imp
     }
   }
 
+  // Map import.id → transaction_identifier so we can resolve the new
+  // transaction.id after insert and apply tag decisions.
+  const importIdToIdentifier = new Map<string, string>()
+  for (const imp of imports) {
+    importIdToIdentifier.set(imp.id, imp.transaction_identifier)
+  }
+
   if (transactionsToInsert.length > 0) {
     const { error: insertError } = await (supabase as any)
       .from('transactions')
@@ -249,7 +298,55 @@ export async function confirmStatementImport(statementId: string, decisions: Imp
     await (supabase as any).from('transaction_imports').update({ resolution: 'rejected' }).in('id', rejectedIds)
   }
 
-  // 3. Mark statement as ingested
+  // 3. Apply tag decisions for accepted imports.
+  // Resolve new transactions.id by (user_id, transaction_identifier).
+  if (suggestionDecisions.length > 0 && acceptedIds.length > 0) {
+    const acceptedIdentifiers = acceptedIds
+      .map(id => importIdToIdentifier.get(id))
+      .filter((s): s is string => Boolean(s))
+
+    if (acceptedIdentifiers.length > 0) {
+      const { data: newTxsData } = await (supabase as any)
+        .from('transactions')
+        .select('id, transaction_identifier')
+        .eq('user_id', statement.uploaded_by)
+        .in('transaction_identifier', acceptedIdentifiers)
+
+      const identifierToNewId = new Map<string, string>(
+        (newTxsData ?? []).map((t: { id: string; transaction_identifier: string }) => [t.transaction_identifier, t.id])
+      )
+
+      const tagRows: { transaction_id: string; tag_id: string; is_primary: boolean }[] = []
+      for (const decision of suggestionDecisions) {
+        if (!decision.acceptedTagIds || decision.acceptedTagIds.length === 0) continue
+        const importId = decision.importId
+        const identifier = importIdToIdentifier.get(importId)
+        if (!identifier) continue
+        const txId = identifierToNewId.get(identifier)
+        if (!txId) continue
+
+        const primaryTagId = decision.primaryTagId ?? decision.acceptedTagIds[0]
+        for (const tagId of decision.acceptedTagIds) {
+          tagRows.push({
+            transaction_id: txId,
+            tag_id: tagId,
+            is_primary: tagId === primaryTagId,
+          })
+        }
+      }
+
+      if (tagRows.length > 0) {
+        const { error: tagsError } = await (supabase as any)
+          .from('transaction_tags')
+          .upsert(tagRows, { onConflict: 'transaction_id,tag_id', ignoreDuplicates: true })
+        if (tagsError) {
+          console.warn('Failed to insert transaction_tags from suggestions')
+        }
+      }
+    }
+  }
+
+  // 4. Mark statement as ingested
   await (supabase as any)
     .from('statements')
     .update({ status: 'ingested' })

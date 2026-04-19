@@ -2,14 +2,19 @@
 
 import { OnboardingWizard } from '@/components/onboarding-wizard'
 import { StatementCard } from '@/components/statement-card'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { UploadDropzone } from '@/components/upload-dropzone'
 import { UploadProgressList } from '@/components/upload-progress-list'
 import { useStatementUpload } from '@/lib/hooks/use-statement-upload'
 import type { Statement } from '@/lib/types/transaction'
+import { Sparkles, X } from 'lucide-react'
 import { useRouter } from 'next/navigation'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+
+const AI_DISCLOSURE_KEY = 'gastos.ai-disclosure-dismissed'
 
 interface UploadViewProps {
   initialRecentImports: Statement[]
@@ -20,6 +25,19 @@ export function UploadView({ initialRecentImports, needsOnboarding }: UploadView
   const router = useRouter()
   const { upload, uploads, isUploading } = useStatementUpload()
   const [showOnboarding, setShowOnboarding] = useState(needsOnboarding)
+  const [showAIDisclosure, setShowAIDisclosure] = useState(false)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    setShowAIDisclosure(window.localStorage.getItem(AI_DISCLOSURE_KEY) !== '1')
+  }, [])
+
+  const dismissAIDisclosure = () => {
+    setShowAIDisclosure(false)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(AI_DISCLOSURE_KEY, '1')
+    }
+  }
 
   const handleFileSelect = useCallback(async (files: File[]) => {
     if (files.length === 0) return
@@ -46,6 +64,27 @@ export function UploadView({ initialRecentImports, needsOnboarding }: UploadView
           <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
             Upload your bank statements and see where your household money really goes.
           </p>
+        </div>
+
+        <div className="max-w-2xl mx-auto mb-6">
+          {showAIDisclosure && (
+            <Alert className="mb-4 border-primary/30 bg-primary/5 flex items-start gap-3">
+              <Sparkles className="h-4 w-4 text-primary mt-0.5" />
+              <AlertDescription className="flex-1 text-sm">
+                After upload, AI suggests tags from your existing categories. Sanitised transaction
+                descriptions are sent to Anthropic for processing.
+              </AlertDescription>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 -mt-1"
+                onClick={dismissAIDisclosure}
+                aria-label="Dismiss"
+              >
+                <X className="h-3 w-3" />
+              </Button>
+            </Alert>
+          )}
         </div>
 
         <div className="max-w-2xl mx-auto mb-12">
