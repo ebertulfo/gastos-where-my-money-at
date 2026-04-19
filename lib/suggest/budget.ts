@@ -16,12 +16,11 @@ function isSameUtcMonth(a: Date, b: Date): boolean {
 }
 
 /**
- * Checks if the user can make another AI tagging call. Resets the monthly
- * spend counter if the calendar month rolled over since `ai_budget_reset_at`.
+ * Checks if the user can make another AI call. Resets the monthly spend
+ * counter if the calendar month rolled over since `ai_budget_reset_at`.
  *
- * Uses the service-role client because this runs from the ingest API route
- * (no cookie session at that point — the upload was authenticated via
- * bearer token) and from the after() hook.
+ * Uses the service-role client so callers from any context (RSC, route
+ * handler, server action) work the same way.
  */
 export async function checkBudget(userId: string): Promise<BudgetCheck> {
   const supabase = createServerClient()
@@ -64,16 +63,13 @@ export async function checkBudget(userId: string): Promise<BudgetCheck> {
 
 /**
  * Atomically increments the user's monthly AI spend by `cents`. Best-effort —
- * a failure here logs but doesn't bubble (we'd rather over-charge by a fraction
- * of a cent than fail the user's tagging suggestions).
+ * a failure here logs but doesn't bubble (we'd rather over-charge by a
+ * fraction of a cent than fail the user's tagging suggestions).
  */
 export async function incrementSpend(userId: string, cents: number): Promise<void> {
   if (cents <= 0) return
   const supabase = createServerClient()
 
-  // Read-modify-write is fine here: per-user contention is effectively zero
-  // (a single user can't race their own ingest pipeline meaningfully) and we
-  // explicitly accept tiny over-charges rather than wire up an RPC.
   const { data, error: readError } = await (supabase as any)
     .from('user_settings')
     .select('ai_spent_this_month_cents')

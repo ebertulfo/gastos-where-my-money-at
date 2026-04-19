@@ -50,6 +50,7 @@ const DEFAULT_TAGS = [
 
 export type OnboardingInput = {
     currency: string
+    country: string
     useDefaultTags: boolean
 }
 
@@ -85,7 +86,7 @@ export async function completeOnboarding(input: OnboardingInput) {
     if (!user) throw new Error('Unauthorized')
 
     // 1. Save Settings
-    await updateSettings({ currency: input.currency })
+    await updateSettings({ currency: input.currency, country: input.country })
 
     // 2. Create Tags (if requested)
     if (input.useDefaultTags) {

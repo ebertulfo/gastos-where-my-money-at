@@ -43,17 +43,10 @@ export interface DuplicatePair {
     initialDecision?: 'keep_existing' | 'add_new'
 }
 
-export interface ImportSuggestion {
-    importId: string
-    suggestedTagIds: string[]
-    status: 'pending' | 'completed' | 'failed' | 'skipped' | 'disabled'
-}
-
 export interface ImportReview {
     statement: Statement
     newTransactions: Transaction[]
     duplicates: DuplicatePair[]
-    suggestions: ImportSuggestion[]
 }
 
 export interface ImportDecision {

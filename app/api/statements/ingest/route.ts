@@ -1,5 +1,5 @@
 
-import { after, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { checkRateLimit } from "@/lib/rate-limit";
 import {
   extractTablesFromPdf,
@@ -7,7 +7,6 @@ import {
 } from "@/lib/pdf/extract-tables";
 import { ingestStatement } from "@/lib/db/ingest";
 import { createServerClient } from "@/lib/supabase/client";
-import { suggestTagsForStatement } from "@/lib/categorize/suggest-tags";
 
 // Force dynamic to prevent static generation issues
 export const dynamic = 'force-dynamic';
@@ -184,21 +183,9 @@ export async function POST(request: Request) {
       userId: user.id,
     });
 
-    // Fire-and-forget AI tag suggestions. Runs after the response ships so
-    // the upload UX doesn't block on Anthropic. Skipped for duplicate uploads
-    // (those have no new pending imports to tag).
-    if (result.success && result.statementId && !result.isDuplicate) {
-      after(async () => {
-        try {
-          await suggestTagsForStatement(result.statementId);
-        } catch (err) {
-          // suggestTagsForStatement is supposed to swallow its own errors;
-          // this is a belt-and-braces guard.
-          console.warn("Background AI tagging failed");
-        }
-      });
-    }
-
+    // No background tagging here — suggestions now run on-demand when the
+    // user opens TagInput on /transactions. Embeddings for those rows are
+    // computed inside confirmStatementImport once the user accepts them.
     return NextResponse.json(result, { status: 200 });
 
   } catch (error) {

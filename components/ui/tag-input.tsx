@@ -1,6 +1,6 @@
 'use client'
 
-import { Check, ChevronsUpDown, Plus, Trash2, X } from "lucide-react"
+import { Check, ChevronsUpDown, Loader2, Plus, Sparkles, Trash2, X } from "lucide-react"
 import * as React from "react"
 
 import { createTag, deleteTag } from "@/app/actions/tags"
@@ -20,6 +20,7 @@ import {
     PopoverTrigger,
 } from "@/components/ui/popover"
 import { Tag } from "@/lib/supabase/database.types"
+import type { TagSuggestion } from "@/lib/suggest/types"
 import { cn } from "@/lib/utils"
 
 interface TagInputProps {
@@ -30,6 +31,12 @@ interface TagInputProps {
     onTagDelete?: () => void
     isLoading?: boolean
     disabled?: boolean
+    /**
+     * Called once per popover-open. Returns AI tag suggestions to render
+     * as dashed pills above the search box. If omitted, the suggestion
+     * row never renders.
+     */
+    getSuggestions?: () => Promise<TagSuggestion[]>
 }
 
 // Helper to find a tag by ID from the available list
@@ -37,13 +44,48 @@ function findTag(id: string, tags: Tag[]) {
     return tags.find(t => t.id === id)
 }
 
-export function TagInput({ selectedTags, availableTags, onTagsChange, onTagDelete, isLoading, disabled }: TagInputProps) {
+export function TagInput({ selectedTags, availableTags, onTagsChange, onTagDelete, isLoading, disabled, getSuggestions }: TagInputProps) {
     const [open, setOpen] = React.useState(false)
     const [inputValue, setInputValue] = React.useState("")
     const [isCreating, setIsCreating] = React.useState(false)
+    const [suggestions, setSuggestions] = React.useState<TagSuggestion[] | null>(null)
+    const [isSuggesting, setIsSuggesting] = React.useState(false)
+    const suggestionsLoadedRef = React.useRef(false)
 
     // Derived state for selected IDs
     const selectedIds = React.useMemo(() => selectedTags.map(t => t.id), [selectedTags])
+
+    // Fetch suggestions the first time the popover opens. Caches for the
+    // life of the component (per-row); reopening doesn't re-fetch.
+    React.useEffect(() => {
+        if (!open || !getSuggestions || suggestionsLoadedRef.current) return
+        suggestionsLoadedRef.current = true
+        setIsSuggesting(true)
+        getSuggestions()
+            .then(s => setSuggestions(s))
+            .catch(() => setSuggestions([]))
+            .finally(() => setIsSuggesting(false))
+    }, [open, getSuggestions])
+
+    // Filter out suggestions for tags the user has already applied or
+    // dismissed. Map IDs to Tag rows for rendering.
+    const visibleSuggestions = React.useMemo(() => {
+        if (!suggestions) return []
+        const selected = new Set(selectedIds)
+        return suggestions
+            .filter(s => !selected.has(s.tagId))
+            .map(s => ({ suggestion: s, tag: availableTags.find(t => t.id === s.tagId) }))
+            .filter((x): x is { suggestion: TagSuggestion; tag: Tag } => Boolean(x.tag))
+    }, [suggestions, selectedIds, availableTags])
+
+    const handleAcceptSuggestion = (tagId: string) => {
+        onTagsChange([...selectedIds, tagId])
+        setSuggestions(prev => prev ? prev.filter(s => s.tagId !== tagId) : prev)
+    }
+
+    const handleDismissSuggestion = (tagId: string) => {
+        setSuggestions(prev => prev ? prev.filter(s => s.tagId !== tagId) : prev)
+    }
 
     const handleSelect = (tagId: string) => {
         if (selectedIds.includes(tagId)) {
@@ -139,10 +181,48 @@ export function TagInput({ selectedTags, availableTags, onTagsChange, onTagDelet
                     )}
                 </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-[300px] p-0" align="start">
+            <PopoverContent className="w-[320px] p-0" align="start">
+                {(isSuggesting || visibleSuggestions.length > 0) && (
+                    <div className="border-b px-3 py-2">
+                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-2">
+                            <Sparkles className="h-3 w-3" />
+                            <span>{isSuggesting ? "Suggesting…" : "Suggested"}</span>
+                            {isSuggesting && <Loader2 className="h-3 w-3 animate-spin ml-auto" />}
+                        </div>
+                        {visibleSuggestions.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5">
+                                {visibleSuggestions.map(({ suggestion, tag }) => (
+                                    <div key={suggestion.tagId} className="flex items-center">
+                                        <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="outline"
+                                            className="h-6 px-2 text-xs border-dashed"
+                                            style={tag.color ? { color: tag.color } : undefined}
+                                            onClick={() => handleAcceptSuggestion(tag.id)}
+                                        >
+                                            <Check className="h-3 w-3 mr-1" />
+                                            {tag.name}
+                                        </Button>
+                                        <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="ghost"
+                                            className="h-6 w-6 p-0 text-muted-foreground"
+                                            onClick={() => handleDismissSuggestion(tag.id)}
+                                            aria-label={`Dismiss ${tag.name}`}
+                                        >
+                                            <X className="h-3 w-3" />
+                                        </Button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
                 <Command>
-                    <CommandInput 
-                        placeholder="Search tags..." 
+                    <CommandInput
+                        placeholder="Search tags..."
                         value={inputValue}
                         onValueChange={setInputValue}
                     />

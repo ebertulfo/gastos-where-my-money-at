@@ -1,20 +1,19 @@
 'use client'
 
-import { confirmStatementImport, deleteStatement, getPendingStatements, getSuggestionsForStatement, saveDuplicateDecision, type SuggestionDecision } from '@/app/actions/statements'
+import { confirmStatementImport, deleteStatement, getPendingStatements, saveDuplicateDecision } from '@/app/actions/statements'
 import { ReviewTabs } from '@/app/imports/[statementId]/review/review-tabs'
-import { SuggestionsPanel, type AcceptedMap, type DismissedMap } from '@/components/suggestions-panel'
 import { TransactionTable } from '@/components/transaction-table'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import type { Tag } from '@/lib/supabase/database.types'
-import type { ImportReview, ImportSuggestion, Statement as UIStatement } from '@/lib/types/transaction'
+import type { ImportReview, Statement as UIStatement } from '@/lib/types/transaction'
 import { formatDate } from '@/lib/utils'
 import { Check, Loader2 } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 
 type DuplicateDecisions = Record<string, 'keep_existing' | 'add_new'>
 
@@ -34,47 +33,6 @@ export function ReviewView({ statementId, review, availableTags, pendingStatemen
   )
   const [isConfirming, setIsConfirming] = useState(false)
   const [isRejecting, setIsRejecting] = useState(false)
-
-  const [suggestions, setSuggestions] = useState<ImportSuggestion[]>(review.suggestions)
-  const [accepted, setAccepted] = useState<AcceptedMap>({})
-  const [dismissed, setDismissed] = useState<DismissedMap>({})
-
-  // Poll while any row is still pending. Stops itself once all rows resolve
-  // (completed/failed/skipped/disabled) or the user navigates away (cleanup).
-  useEffect(() => {
-    const anyPending = suggestions.some(s => s.status === 'pending')
-    if (!anyPending) return
-
-    const interval = setInterval(async () => {
-      try {
-        const updated = await getSuggestionsForStatement(statementId)
-        setSuggestions(updated)
-        if (updated.every(s => s.status !== 'pending')) {
-          clearInterval(interval)
-        }
-      } catch {
-        // Silent — next tick will retry.
-      }
-    }, 1500)
-
-    return () => clearInterval(interval)
-  }, [suggestions, statementId])
-
-  const handleAcceptSuggestion = (importId: string, tagId: string) => {
-    setAccepted(prev => {
-      const current = new Set(prev[importId] ?? [])
-      current.add(tagId)
-      return { ...prev, [importId]: Array.from(current) }
-    })
-  }
-
-  const handleDismissSuggestion = (importId: string, tagId: string) => {
-    setDismissed(prev => {
-      const current = new Set(prev[importId] ?? [])
-      current.add(tagId)
-      return { ...prev, [importId]: Array.from(current) }
-    })
-  }
 
   const setDuplicateDecision = async (importId: string, decision: 'keep_existing' | 'add_new') => {
     setDuplicateDecisions(prev => ({ ...prev, [importId]: decision }))
@@ -96,17 +54,7 @@ export function ReviewView({ statementId, review, availableTags, pendingStatemen
         })),
       ]
 
-      const suggestionDecisions: SuggestionDecision[] = Object.entries(accepted)
-        .filter(([, tagIds]) => tagIds.length > 0)
-        .map(([importId, tagIds]) => ({
-          importId,
-          acceptedTagIds: tagIds,
-          // First-clicked tag becomes primary; this matches click order
-          // because we append to the end of the array on accept.
-          primaryTagId: tagIds[0],
-        }))
-
-      const result = await confirmStatementImport(statementId, decisions, suggestionDecisions)
+      const result = await confirmStatementImport(statementId, decisions)
       if (!result.success) {
         console.error('Confirm failed:', result.error)
         return
@@ -199,16 +147,6 @@ export function ReviewView({ statementId, review, availableTags, pendingStatemen
           </div>
         </CardContent>
       </Card>
-
-      <SuggestionsPanel
-        newTransactions={newTransactions}
-        suggestions={suggestions}
-        availableTags={availableTags}
-        accepted={accepted}
-        dismissed={dismissed}
-        onAccept={handleAcceptSuggestion}
-        onDismiss={handleDismissSuggestion}
-      />
 
       <Card className="mb-8 animate-slide-up">
         <CardHeader>

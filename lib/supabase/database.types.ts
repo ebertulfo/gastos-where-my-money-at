@@ -128,9 +128,6 @@ export type Database = {
       }
       transaction_imports: {
         Row: {
-          ai_model_version: string | null
-          ai_suggested_at: string | null
-          ai_suggestion_status: string
           amount: number
           balance: number | null
           created_at: string
@@ -146,14 +143,10 @@ export type Database = {
           resolution: Database["public"]["Enums"]["import_resolution"]
           statement_id: string
           statement_page: number | null
-          suggested_tag_ids: string[]
           transaction_identifier: string
           updated_at: string
         }
         Insert: {
-          ai_model_version?: string | null
-          ai_suggested_at?: string | null
-          ai_suggestion_status?: string
           amount: number
           balance?: number | null
           created_at?: string
@@ -169,14 +162,10 @@ export type Database = {
           resolution?: Database["public"]["Enums"]["import_resolution"]
           statement_id: string
           statement_page?: number | null
-          suggested_tag_ids?: string[]
           transaction_identifier: string
           updated_at?: string
         }
         Update: {
-          ai_model_version?: string | null
-          ai_suggested_at?: string | null
-          ai_suggestion_status?: string
           amount?: number
           balance?: number | null
           created_at?: string
@@ -192,7 +181,6 @@ export type Database = {
           resolution?: Database["public"]["Enums"]["import_resolution"]
           statement_id?: string
           statement_page?: number | null
-          suggested_tag_ids?: string[]
           transaction_identifier?: string
           updated_at?: string
         }
@@ -256,6 +244,7 @@ export type Database = {
           created_at: string
           date: string
           description: string
+          description_embedding: string | null
           exclusion_reason: string | null
           id: string
           is_excluded: boolean
@@ -274,6 +263,7 @@ export type Database = {
           created_at?: string
           date: string
           description: string
+          description_embedding?: string | null
           exclusion_reason?: string | null
           id?: string
           is_excluded?: boolean
@@ -292,6 +282,7 @@ export type Database = {
           created_at?: string
           date?: string
           description?: string
+          description_embedding?: string | null
           exclusion_reason?: string | null
           id?: string
           is_excluded?: boolean
@@ -320,6 +311,7 @@ export type Database = {
           ai_monthly_budget_cents: number
           ai_spent_this_month_cents: number
           auto_tag_enabled: boolean
+          country: string
           created_at: string
           currency: string
           updated_at: string
@@ -330,6 +322,7 @@ export type Database = {
           ai_monthly_budget_cents?: number
           ai_spent_this_month_cents?: number
           auto_tag_enabled?: boolean
+          country?: string
           created_at?: string
           currency?: string
           updated_at?: string
@@ -340,6 +333,7 @@ export type Database = {
           ai_monthly_budget_cents?: number
           ai_spent_this_month_cents?: number
           auto_tag_enabled?: boolean
+          country?: string
           created_at?: string
           currency?: string
           updated_at?: string
@@ -352,7 +346,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      apply_import_suggestions: { Args: { payload: Json }; Returns: number }
+      [_ in never]: never
     }
     Enums: {
       import_resolution: "pending" | "accepted" | "rejected"

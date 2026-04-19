@@ -63,6 +63,7 @@ export function OnboardingWizard({ open, onFinish }: OnboardingWizardProps) {
         try {
             await completeOnboarding({
                 currency,
+                country: selectedCountry,
                 useDefaultTags
             })
             setStep('success')

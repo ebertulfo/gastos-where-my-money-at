@@ -191,9 +191,9 @@ function TransactionRow({
                         onTagsChange={async (newTagIds) => {
                             if (onTagChangeOverride) {
                                 await onTagChangeOverride(transaction.id, newTagIds)
-                                return 
+                                return
                             }
-                            
+
                             try {
                                 const { assignTagsToTransaction } = await import('@/app/actions/tags')
                                 await assignTagsToTransaction(transaction.id, newTagIds)
@@ -201,6 +201,10 @@ function TransactionRow({
                             } catch (e) {
                                 console.error("Failed to update tags", e)
                             }
+                        }}
+                        getSuggestions={async () => {
+                            const { suggestTagsForTransactionAction } = await import('@/app/actions/suggestions')
+                            return suggestTagsForTransactionAction(transaction.id, 5)
                         }}
                     />
                 </TableCell>

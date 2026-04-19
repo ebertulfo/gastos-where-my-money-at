@@ -71,7 +71,7 @@ export function UploadView({ initialRecentImports, needsOnboarding }: UploadView
             <Alert className="mb-4 border-primary/30 bg-primary/5 flex items-start gap-3">
               <Sparkles className="h-4 w-4 text-primary mt-0.5" />
               <AlertDescription className="flex-1 text-sm">
-                After upload, AI suggests tags from your existing categories. Sanitised transaction
+                When you tag transactions, AI suggests categories from your existing tags. Sanitised
                 descriptions are sent to OpenAI for processing.
               </AlertDescription>
               <Button

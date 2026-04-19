@@ -6,6 +6,7 @@ import { revalidatePath } from 'next/cache'
 export type UserSettings = {
     user_id: string
     currency: string
+    country: string
     created_at: string
     updated_at: string
 }
@@ -39,20 +40,25 @@ export async function getSettings() {
     return data as UserSettings | null
 }
 
-export async function updateSettings(input: { currency?: string }) {
+export async function updateSettings(input: { currency?: string; country?: string }) {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
 
     if (!user) throw new Error('Unauthorized')
 
-    // Use Upsert for robustness
+    const payload: Record<string, unknown> = {
+        user_id: user.id,
+        updated_at: new Date().toISOString(),
+    }
+    if (input.currency !== undefined) payload.currency = input.currency
+    if (input.country !== undefined) payload.country = input.country
+
+    // Default currency on first creation if neither side provided one.
+    if (!('currency' in payload)) payload.currency = 'SGD'
+
     const { error: upsertError } = await (supabase
         .from('user_settings' as any) as any)
-        .upsert({
-            user_id: user.id,
-            currency: input.currency || 'SGD',
-            updated_at: new Date().toISOString()
-        }, { onConflict: 'user_id' })
+        .upsert(payload, { onConflict: 'user_id' })
 
     if (upsertError) {
         console.error('Error updating settings:', upsertError)
