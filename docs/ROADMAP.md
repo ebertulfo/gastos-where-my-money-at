@@ -1,6 +1,14 @@
 # Gastos Roadmap
 
-_Last updated: 2025-12-05_
+_Last updated: 2026-04-19_
+
+## Status At-A-Glance
+
+- **M1 — Statement Ingestion MVP**: **shipped**. Upload → parse → review → commit works end-to-end. Auth, landing page, and dedicated statement management are in place.
+- **M1.5 refinements**: tagging (replaces "categories" — see Spec 3), exclusion column, onboarding wizard, review screen overhaul (Spec 6 + revision), transactions page migrated to RSC + Server Actions + optimistic UI, RSC migration of /upload + /imports/[id]/review, cache-invalidation rule documented.
+- **M2 — Classification & Enrichment**: **partial**. On-demand hybrid tag suggestions shipped (`lib/suggest/`): pgvector KNN over the user's tagged history, with gpt-5.4-nano LLM fallback for cold-start. Surfaces in TagInput on /transactions. No merchant normalization yet.
+- **M3 — Insights Dashboard**: **v0 shipped**. `/insights` page with [Statement | Month | Year] toggle: headline + tag breakdown + top-10 merchants. No commentary / trend narrative / charts yet.
+- **M4 — Hybrid Inputs**: not started.
 
 ## 0. Product Direction
 
@@ -21,20 +29,37 @@ Primary initial users:
 
 These are the current spec documents this roadmap builds on:
 
-- **PDF Parsing Pipeline — Spec (v2)**  
-  `docs/specs/0-transactions-extractor.md` :contentReference[oaicite:0]{index=0}  
+- **PDF Parsing Pipeline — Spec (v3)**  
+  `docs/specs/0-transactions-extractor.md`
 
 - **Transaction Identifier Specification**  
-  `docs/specs/1-transaction-identifier.md` :contentReference[oaicite:1]{index=1}  
+  `docs/specs/1-transaction-identifier.md`
 
-- **Transaction Storage & Deduplication — Spec (v0.1)**  
-  `docs/specs/2-transaction-storage-dedup.md` :contentReference[oaicite:2]{index=2}  
+- **Transaction Storage & Deduplication — Spec (v0.3)**  
+  `docs/specs/2-storing-transactions.md`
+
+- **Categorization, Exclusion & Onboarding — Spec (v0.2)**  
+  `docs/specs/3-categorization-and-onboarding.md`
+
+- **Statement Management — Spec (v0.1)**  
+  `docs/specs/4-statement-management.md`
+
+- **Authentication & Onboarding — Spec (v0.1)**  
+  `docs/specs/5-auth-and-landing.md`
+
+- **Review Refinements — Spec (v1.0)**  
+  `docs/specs/6-review-refinements.md`
+
+- **Review Screen Overhaul — Delta Spec**  
+  `docs/specs/6-revision-review-screen.md`
 
 These define:
 
-- How PDFs are parsed safely in-memory and normalized into `[Date, Description, Amount]` rows.
-- How unique transaction identifiers are generated for deduplication.
-- How statements and transactions are stored, staged, and confirmed by the user.
+- How PDFs are parsed safely in-memory and normalized into `[Date, Description, Amount, Balance, Identifier]` rows (Spec 0 v3).
+- How unique transaction identifiers are generated for deduplication (Spec 1).
+- How statements and transactions are stored, staged, and confirmed by the user (Spec 2 v0.3).
+- How tagging, exclusion, and onboarding shipped (Spec 3 v0.2 — note that original "categories" was replaced by tags).
+- How statement management, auth/landing, and the review-screen overhaul layered on top (Specs 4–6).
 
 The roadmap below assumes these are the foundation.
 
@@ -57,7 +82,9 @@ Add extra ways to log non-statement expenses (cash, receipts) on top of the stat
 
 ---
 
-## 3. M1 — Statement Ingestion MVP
+## 3. M1 — Statement Ingestion MVP (Shipped)
+
+> **Status (2026-04-19):** Shipped. The details below describe the M1 goal as originally conceived; see the linked specs for current behaviour. Notable post-spec changes: duplicate handling moved from "user-resolved per row" to "silently skipped via ON CONFLICT DO NOTHING" (Spec 6), and the parser was rewritten onto `pdfjs-dist`/`unpdf` word coordinates (Spec 0 v3).
 
 ### Goal
 
@@ -135,13 +162,15 @@ This milestone should be **usable by you and your wife** end-to-end.
 
 ---
 
-## 4. M2 — Classification & Enrichment
+## 4. M2 — Classification & Enrichment (Partial stand-in)
+
+> **Status (2026-04-19):** AI classification not started. User-defined **tags** (`tags` + `transaction_tags` tables, many-to-many) replaced the originally-planned single `categories` column. See Spec 3 for the rationale and current tagging surface.
 
 ### Goal
 
 Turn raw transactions into **enriched financial data**:
 
-- Categories (Food, Transport, Groceries, etc.).
+- Categories (Food, Transport, Groceries, etc.) — currently user-tagged, not AI-classified.
 - Merchant normalization (grouping variations of the same merchant).
 - Metadata for later insights (recurring payments, subscriptions, etc.).
 

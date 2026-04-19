@@ -186,3 +186,45 @@ A single end-to-end push that took the app from "M1 shipped, but…" to a fully 
 - Insights commentary / MoM trends / charts — separate spec.
 - Currency consolidation across schema (still `'SGD'` fallback).
 - Merchant normalization (`GRAB*RIDE` variants → `Grab`) — M2 follow-up.
+
+## 2026-04-19: AI provider swap → perf → on-demand hybrid suggestions (Session 10)
+
+**Current Status**: M2 reshaped — categorisation is now on-demand, not at ingest. Suggestion quality improves with usage rather than depending on a pre-built reference.
+
+Five commits, on top of Session 9. Architecture changed twice in one session as the constraints became clearer.
+
+### Recent Accomplishments
+
+- **OpenAI swap** (`65eee3a`): replaced `@anthropic-ai/sdk` (claude-haiku-4-5) with `openai` (gpt-4o-mini). Same prompt + tool-use contract. Reads `OPEN_AI_API_KEY` (with `OPENAI_API_KEY` fallback). Pricing constants + cache-token field updated for OpenAI's `prompt_tokens_details.cached_tokens` shape.
+- **Perf pass on the (then still-existing) ingest-time tagger** (`3315373`): batches were sequential and per-row UPDATEs were serial PostgREST round-trips. Switched to parallel batches with a `p-limit(4)` cap and a new `apply_import_suggestions(payload jsonb)` RPC for single-roundtrip writes. Batch size 50→25 for faster TTFT. Roughly 4× faster wall-time for ~100-row statements.
+- **Architecture pivot — on-demand hybrid suggestions** (`6b5b022`): scrapped the after-hook ingest-time LLM tagger entirely. New `lib/suggest/` module:
+  - **pgvector + HNSW** on `transactions.description_embedding` (1536-dim, `text-embedding-3-small`). New `knn_neighbour_tags` RPC returns top-K similar tagged transactions in one trip with their tags joined as JSONB.
+  - **Hybrid suggester**: KNN-only when ≥3 strong neighbours (sim ≥ 0.75); else falls back to **gpt-5.4-nano** with weak KNN hits as few-shot examples and the user's locale ("user from Singapore…"). Cost trajectory inverts usage — every manual tag becomes a free reference for future suggestions.
+  - **Hierarchy collapse** drops ancestors when a descendant is also suggested (Coffee wins over Food, transitively).
+  - **TagInput on /transactions** fetches suggestions on first popover open; renders dashed-pill suggestions with Sparkles icon. Click → applies; X → dismisses.
+  - **Embed-on-commit**: `confirmStatementImport` embeds just-promoted rows so KNN works the first time. `backfillTransactionEmbeddings` server action covers existing data.
+  - **Tear-down**: deleted `lib/categorize/` entirely, `components/suggestions-panel.tsx`, the `after()` hook, polling/state in review-view, `getSuggestionsForStatement`, `ImportSuggestion` type, plus the staging-row AI columns from Session 9 (`suggested_tag_ids`, `ai_suggestion_status`, `ai_model_version`, `ai_suggested_at`) and the `apply_import_suggestions` RPC.
+  - Re-added `country` on `user_settings` (wired through onboarding) for LLM locale context.
+- **Multi-tag bug fix** (`bd861b1`): `is_primary` defaults to `true` and a unique partial index allows only one primary per transaction. `assignTagsToTransaction` was inserting all tags with the default → second insert failed `idx_transaction_tags_one_primary`. Fix: explicit `is_primary: i === 0`. Also stopped the TagInput popover from slamming shut after every selection so users can stack tags in one open.
+- **Country codes in embeddings** (`4d098f2`): `normalize` regex was stripping `SG`/`JP`/`HK`/etc. before embedding, collapsing "AMAZON JP" and plain "AMAZON" to the same vector — so KNN couldn't learn locale-anchored patterns no matter how many JP transactions the user tagged. Reverted that strip; country codes carry signal. Added a `Refresh AI` button (top-right of /transactions) that calls `backfillTransactionEmbeddings({ force: true })` to re-embed everything when the normalization rules change.
+
+### Verification
+- `npm run test:run`: 65/65 ✅ (added `lib/suggest/__tests__/normalize.test.ts` with 10 cases + `suggest.test.ts` with 7 hierarchy-collapse cases)
+- `npm run build`: clean ✅
+- New migrations applied via `npx supabase migration up --local` (no `db reset` — preserves data):
+  - `20260419000003_pgvector_embeddings.sql` — pgvector extension, embedding column + HNSW index, `country` on user_settings, drops Session 9's after-hook AI columns/RPC
+  - `20260419000004_knn_neighbour_tags_rpc.sql` — KNN helper function
+
+### Architectural notes for future sessions
+- **No external seed data**: explicitly rejected (Foursquare OS Places, MCC codes, OSM Overpass, HF labeled datasets, pretrained classifiers). The LLM cold-start covers the first ~10 transactions; KNN takes over once the user has tagged enough that strong neighbours exist. Quality compounds with use.
+- **Vitest config** now includes a `@/` path alias matching `tsconfig.json` (`vitest.config.ts`) — needed for `lib/suggest/normalize.ts` to import `@/lib/pdf/types`.
+- **Embedding staleness**: any change to `normalizeForEmbedding` invalidates existing embeddings. The `Refresh AI` button is the recovery path; flag it in any future PR that touches `lib/suggest/normalize.ts`.
+
+### Out of scope / deferred (still)
+- Tag management UI (`/tags`) — Track C.
+- Settings page (budget adjustment, country change, auto-tag toggle) — Track C; all are DB-editable only.
+- Insights commentary / MoM trends / charts.
+- Currency consolidation.
+- Merchant normalization for top-merchant aggregation.
+- Pre-seeded merchant dictionaries — see "no external seed data" decision above.
+- Local sentence-transformers / pretrained DistilBERT classifiers — adds infra without enough quality win.
