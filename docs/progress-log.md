@@ -109,3 +109,80 @@ We implemented the dedicated Statement Management features, allowing users to vi
 ### Next Steps
 1. **Testing**: Perform thorough manual or automated testing of the new pages (deferred due to time constraints).
 2. **Category Rules**: Begin implementation of categorization logic (M2).
+
+## 2026-01-18: Auth & Landing Page (Session 6)
+
+**Current Status**: M1 → Public-ready shell
+
+Shifted from "dev tool for me" to "private workspace" per Spec 5.
+
+### Recent Accomplishments
+- **Auth (Spec 5)**:
+    - Landing page at `/`, login at `/login` (email + 6-digit OTP), dashboard moved to `/upload`.
+    - `middleware.ts` enforces auth redirects and session refresh via `@supabase/ssr`.
+    - E2E bypass: `test-*@…` + OTP `111111` works in non-production to unblock Playwright without real inboxes.
+- **Parsing tweaks**: Minor improvements to the existing `pdf-parse`-based extractor (commit: "Add auth, landing page, and improve parsing").
+
+## 2026-01-20: Review Refinements & Security Bump (Session 7)
+
+**Current Status**: M1.5 — Review UX overhaul
+
+Addressed user feedback on the review screen (Specs 6 + 6-revision) and patched a Next.js CVE.
+
+### Recent Accomplishments
+- **Review screen overhaul (Spec 6 + 6-revision)**:
+    - Removed the "Potential Duplicates" section — duplicates are now silently skipped at commit via `ON CONFLICT DO NOTHING`.
+    - Inverted the interaction model: every row is selected by default with a checkbox; unchecking marks for exclusion (was previously "click minus to exclude").
+    - Date-grouped list with sticky date headers.
+    - Sticky footer with `Confirm Import` + `Delete Import` so the primary action is always visible.
+    - Re-enabled the Tags column in the Transactions view (stays off in Review via `enableTagging={false}`).
+- **Exclusion persistence**: `transaction_imports` got `is_excluded` + `exclusion_reason` columns (migration `20260120000001`) so review-time exclusions survive the commit hop.
+- **Security**: Bumped Next.js to 16.1.4 for CVE-2025-66478.
+
+## 2026-01-25: Transactions RSC Refactor & E2E Stabilization (Session 8)
+
+**Current Status**: M1.5 — Architecture cleanup
+
+Migrated the transactions page to the RSC-first pattern the rest of the app was drifting toward, and shored up the E2E auth flow.
+
+### Recent Accomplishments
+- **Transactions page → RSC + Server Actions + optimistic UI**:
+    - `app/transactions/page.tsx` now fetches month/statement data server-side via `refreshTransactionData` (composite Server Action) and hands initial data to the client component.
+    - Client component `components/transactions-view.tsx` uses optimistic mutations for tags and exclusion, with silent revalidation instead of global spinners.
+    - Fixed a bug where the transactions API was being re-triggered on every client render.
+- **Auth**:
+    - Fixed magic-link URL generation (`getURL()` helper now produces a correct absolute URL for email templates).
+    - Added Playwright E2E for login (`tests/e2e/login.spec.ts`) using the `test-*` backdoor.
+
+### Next Steps
+1. **M2 preparation**: Decide whether AI categorization should write `tag_id`s against the existing tags table or introduce a parallel `ai_category` field. Lean toward the former.
+2. **Tag management UI**: No dedicated page exists today; tags are created inline but can't be renamed, merged, or deleted from the app.
+3. **Currency consolidation**: `statements.currency` (defaults to `PHP` in migration, `SGD` in `ingest.ts`, `SGD` via `user_settings`) is currently contradictory — reconcile before multi-currency work.
+
+## 2026-04-19: Parser commit + cache fix + AI auto-tag + /insights (Session 9)
+
+**Current Status**: M2 partial (AI categorisation shipped) + M3 v0 (insights page shipped).
+
+A single end-to-end push that took the app from "M1 shipped, but…" to a fully working categorisation + insights loop. Six commits, all on `main`, none pushed.
+
+### Recent Accomplishments
+
+- **Parser rewrite committed** (`af74630`): the `pdfjs-dist` + word-coord layout pipeline that had been sitting on the working tree since Session 8 is now in history. 48 unit tests pass cleanly. Spec 0 v3 + Spec 6-revision are the source of truth.
+- **Vitest config** (`1274a98`): added `vitest.config.ts` excluding `tests/**` so Playwright specs no longer leak into vitest discovery.
+- **Cache invalidation fix** (`50c7f05`, the user's explicit ask): every Server Action now `revalidatePath`s the surfaces it affects. The "delete statement doesn't refresh" / "import doesn't show up" class of bug is gone. Rule is documented in `CLAUDE.md` so future actions don't regress. Same commit also folded in: hardcoded redirect fix (`?month=2025-12` → derived from `period_end`), `mapDBStatementToUI` helper centralising the duplicated mapper, deletion of `lib/services/{statement-service,mock-data}.ts` (zero callers — the upload flow's `uploadStatement` is now inlined in `lib/hooks/use-statement-upload.ts`), and `lib/types/insights.ts` + `lib/categorize/types.ts` pre-work.
+- **RSC migration of `/upload` and `/imports/[id]/review`** (`2e55acc`): both pages were `'use client'` with `useEffect` fetches. Now async RSC + thin client child for mutations only. New `components/upload-view.tsx` and `components/review-view.tsx`. `lib/hooks/use-statement-review.ts` deleted.
+- **AI tagging on ingest** (`a88240b`): full pipeline. New schema (`20260419000001_imports_suggested_tags.sql`) adds `suggested_tag_ids`, `ai_suggestion_status` (`pending|completed|failed|skipped|disabled`), `ai_model_version`, `ai_suggested_at` to `transaction_imports`; `auto_tag_enabled` + monthly budget tracking on `user_settings`; `is_primary` on `transaction_tags` with a unique partial index. New `lib/categorize/` module: Anthropic SDK client (`claude-haiku-4-5`), prompt builder with cache control, budget check/increment with monthly rollover, p-limit concurrency cap. Wired via Next.js `after()` in the ingest API route — never blocks upload UX. Review screen polls every 1.5s while pending; `components/suggestions-panel.tsx` renders dashed-outline pills with click-to-accept / X-to-dismiss. `confirmStatementImport` resolves new `transactions.id` by `(user_id, transaction_identifier)` after insert and batch-upserts `transaction_tags` with the first accepted tag marked `is_primary`. One-time AI disclosure banner on `/upload`.
+- **`/insights` page** (`b5f8154`): replaces the "Coming in M3" placeholder. Single page with `[Statement | Month | Year]` segmented toggle. New `getInsights(period)` Server Action aggregates by primary tag (no more even-splitting amounts across multi-tag transactions) and by exact merchant string. RSC defaults to the latest month with data; client view persists the last selection in `localStorage`. `/summary` becomes a redirect to `/insights`. Nav renamed.
+
+### Verification
+- `npm run test:run`: 53/53 ✅
+- `npm run build`: clean ✅
+- `npx supabase db reset`: applies all 9 migrations including the new one ✅
+- Type regen + helper aliases re-appended to `lib/supabase/database.types.ts` ✅
+
+### Out of scope / deferred
+- Tag management UI (`/tags` rename/merge/delete) — Track C.
+- Settings page — Track C; `auto_tag_enabled` and budget are DB-editable only.
+- Insights commentary / MoM trends / charts — separate spec.
+- Currency consolidation across schema (still `'SGD'` fallback).
+- Merchant normalization (`GRAB*RIDE` variants → `Grab`) — M2 follow-up.
