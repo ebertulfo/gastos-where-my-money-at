@@ -1,241 +1,54 @@
-'use client'
-
+import { getPendingStatements, getReviewData } from '@/app/actions/statements'
 import { getTags } from '@/app/actions/tags'
-import { getPendingStatements } from '@/app/actions/statements'
-import { ReviewTabs } from './review-tabs'
-
 import { NavHeader } from '@/components/nav-header'
-import { TransactionTable } from '@/components/transaction-table'
-import {
-    Accordion,
-    AccordionContent,
-    AccordionItem,
-    AccordionTrigger,
-} from '@/components/ui/accordion'
-import { Badge } from '@/components/ui/badge'
+import { ReviewView } from '@/components/review-view'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Separator } from '@/components/ui/separator'
-import { useStatementReview } from '@/lib/hooks/use-statement-review'
-import { Tag } from '@/lib/supabase/database.types'
-import { formatDate } from '@/lib/utils'
-import { AlertTriangle, ArrowLeft, Check, Loader2 } from 'lucide-react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
-import { use, useEffect, useState } from 'react'
+
+export const dynamic = 'force-dynamic'
 
 interface ReviewPageProps {
-    params: Promise<{ statementId: string }>
+  params: Promise<{ statementId: string }>
 }
 
-export default function ReviewPage({ params }: ReviewPageProps) {
-    const { statementId } = use(params)
-    const router = useRouter()
-    const [availableTags, setAvailableTags] = useState<Tag[]>([])
-    const [pendingStatements, setPendingStatements] = useState<any[]>([])
+export default async function ReviewPage({ params }: ReviewPageProps) {
+  const { statementId } = await params
 
-    useEffect(() => {
-        getTags().then(setAvailableTags).catch((err) => console.error('Failed to fetch tags', err))
-        getPendingStatements().then(setPendingStatements).catch((err: unknown) => console.error('Failed to fetch pending', err))
-    }, [])
-
-    const {
-        review,
-        isLoading,
-        error,
-        duplicateDecisions,
-        setDuplicateDecision,
-        confirm: confirmImport,
-        isConfirming,
-        reject,
-        isRejecting,
-    } = useStatementReview(statementId)
-
-    const handleConfirm = async () => {
-        const result = await confirmImport()
-        if (!result.success) return
-
-        // Next pending statement → continue review chain. Otherwise land on
-        // the month the just-confirmed statement covers (so the user sees
-        // the rows they just imported).
-        try {
-            const updatedPending = await getPendingStatements()
-            const nextStatement = updatedPending.find(s => s.id !== statementId)
-
-            if (nextStatement) {
-                router.push(`/imports/${nextStatement.id}/review`)
-                return
-            }
-        } catch (e) {
-            // Fall through to transactions redirect.
-        }
-
-        const monthQuery = result.targetMonth ? `?month=${result.targetMonth}` : ''
-        router.push(`/transactions${monthQuery}`)
-    }
-
-    if (isLoading) {
-        return (
-            <div className="min-h-screen bg-background">
-                <NavHeader />
-                <main className="container py-8">
-                    <div className="flex items-center justify-center py-20">
-                        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                    </div>
-                </main>
-            </div>
-        )
-    }
-
-    if (error || !review) {
-        return (
-            <div className="min-h-screen bg-background">
-                <NavHeader />
-                <main className="container py-8">
-                    <div className="text-center py-20">
-                        <p className="text-destructive mb-4">{error || 'Failed to load review data'}</p>
-                        <Button variant="ghost" asChild>
-                            <Link href="/">Go back</Link>
-                        </Button>
-                    </div>
-                </main>
-            </div>
-        )
-    }
-
-    const { statement, newTransactions } = review
-
+  let review
+  try {
+    review = await getReviewData(statementId)
+  } catch (err) {
     return (
-        <div className="min-h-screen bg-background">
-            <NavHeader />
-
-            <main className="container py-8">
-                {/* Header */}
-                <div className="flex flex-col gap-6 mb-8">
-                    <ReviewTabs
-                        currentStatementId={statementId}
-                        pendingStatements={pendingStatements}
-                    />
-
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <h1 className="text-2xl font-bold">
-                                Review Import: {statement.bankName}
-                            </h1>
-                            <p className="text-muted-foreground">
-                                {formatDate(statement.periodStart)} – {formatDate(statement.periodEnd)}
-                            </p>
-                        </div>
-                        <Button variant="ghost" size="sm" asChild>
-                            <Link href="/">
-                                Return to Dashboard
-                            </Link>
-                        </Button>
-                    </div>
-                </div>
-
-                {/* Statement Summary Card */}
-                <Card className="mb-8 animate-fade-in">
-                    <CardContent className="p-6">
-                        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                            <div>
-                                <p className="text-sm text-muted-foreground">Bank / Account</p>
-                                <p className="font-medium">
-                                    {statement.bankName}
-                                    {statement.accountLabel && ` (${statement.accountLabel})`}
-                                </p>
-                            </div>
-                            <div>
-                                <p className="text-sm text-muted-foreground">Period</p>
-                                <p className="font-medium">
-                                    {formatDate(statement.periodStart)} – {formatDate(statement.periodEnd)}
-                                </p>
-                            </div>
-                            <div>
-                                <p className="text-sm text-muted-foreground">Currency</p>
-                                <p className="font-medium">{statement.currency}</p>
-                            </div>
-                            <div>
-                                <p className="text-sm text-muted-foreground">Found</p>
-                                <div className="flex items-center gap-2">
-                                    <p className="font-medium">{statement.transactionCount} transactions</p>
-                                </div>
-                            </div>
-                        </div>
-                        <Separator className="my-4" />
-                        <div className="flex items-center gap-4">
-                            <div className="flex items-center gap-2">
-                                <Badge variant="default" className="bg-success">
-                                    <Check className="h-3 w-3 mr-1" />
-                                    New: {newTransactions.length}
-                                </Badge>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-
-                {/* Section A: New Transactions */}
-                <Card className="mb-8 animate-slide-up">
-                    <CardHeader>
-                        <CardTitle className="flex items-center gap-2">
-                            <Check className="h-5 w-5 text-success" />
-                            New Transactions
-                        </CardTitle>
-                        <p className="text-sm text-muted-foreground">
-                            {newTransactions.length} new transactions will be added to your history.
-                        </p>
-                    </CardHeader>
-                    <CardContent>
-                        <TransactionTable
-                            transactions={newTransactions}
-                            availableTags={availableTags}
-                            showSource={false}
-                            emptyMessage="No new transactions found."
-                            enableTagging={false}
-                        />
-                    </CardContent>
-                </Card>
-
-
-
-                {/* Footer Actions */}
-                <div className="flex items-center justify-between py-6 border-t">
-                    <Button
-                        variant="destructive"
-                        onClick={async () => {
-                            if (window.confirm('Are you sure you want to delete this import? This action cannot be undone.')) {
-                                const success = await reject()
-                                if (success) {
-                                    router.push('/')
-                                }
-                            }
-                        }}
-                        disabled={isRejecting || isConfirming}
-                    >
-                        {isRejecting ? (
-                            <>
-                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                                Deleting...
-                            </>
-                        ) : (
-                            'Delete Import'
-                        )}
-                    </Button>
-                    <Button onClick={handleConfirm} disabled={isConfirming || isRejecting}>
-                        {isConfirming ? (
-                            <>
-                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                                Importing...
-                            </>
-                        ) : (
-                            <>
-                                <Check className="h-4 w-4 mr-2" />
-                                Finish Import
-                            </>
-                        )}
-                    </Button>
-                </div>
-            </main>
-        </div>
+      <div className="min-h-screen bg-background">
+        <NavHeader />
+        <main className="container py-8">
+          <div className="text-center py-20">
+            <p className="text-destructive mb-4">
+              {err instanceof Error ? err.message : 'Failed to load review data'}
+            </p>
+            <Button variant="ghost" asChild>
+              <Link href="/">Go back</Link>
+            </Button>
+          </div>
+        </main>
+      </div>
     )
+  }
+
+  const [availableTags, pendingStatements] = await Promise.all([
+    getTags(),
+    getPendingStatements(),
+  ])
+
+  return (
+    <div className="min-h-screen bg-background">
+      <NavHeader />
+      <ReviewView
+        statementId={statementId}
+        review={review}
+        availableTags={availableTags}
+        pendingStatements={pendingStatements}
+      />
+    </div>
+  )
 }
