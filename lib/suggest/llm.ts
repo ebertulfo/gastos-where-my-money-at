@@ -84,8 +84,11 @@ ${renderFewShot(args.fewShotNeighbours, tagsById)}
 
 Rules:
 1. Prefer the most specific tag (a child like "Coffee" over its parent "Food").
-2. Return 1-5 tag IDs ranked best-first.
-3. If nothing fits, return an empty array. Never guess.
+2. Always return at least 1 tag (up to 5), ranked best-first — best match first,
+   weaker guesses after. Even for loose fits, pick the closest option in the
+   vocabulary so the user sees a starting point they can accept or dismiss.
+3. Only return an empty array if the vocabulary is so unrelated that no tag
+   is even remotely applicable.
 4. Never invent IDs. Only use IDs that appear in the vocabulary above.`
 
   let response

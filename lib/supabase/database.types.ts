@@ -95,6 +95,8 @@ export type Database = {
         Row: {
           color: string | null
           created_at: string
+          description: string | null
+          embedding: string | null
           id: string
           name: string
           parent_id: string | null
@@ -103,6 +105,8 @@ export type Database = {
         Insert: {
           color?: string | null
           created_at?: string
+          description?: string | null
+          embedding?: string | null
           id?: string
           name: string
           parent_id?: string | null
@@ -111,6 +115,8 @@ export type Database = {
         Update: {
           color?: string | null
           created_at?: string
+          description?: string | null
+          embedding?: string | null
           id?: string
           name?: string
           parent_id?: string | null
@@ -346,7 +352,28 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      knn_nearest_tags: {
+        Args: { p_embedding: string; p_limit?: number; p_user_id: string }
+        Returns: {
+          id: string
+          name: string
+          similarity: number
+        }[]
+      }
+      knn_neighbour_tags: {
+        Args: {
+          p_embedding: string
+          p_exclude_id: string
+          p_limit?: number
+          p_user_id: string
+        }
+        Returns: {
+          description: string
+          id: string
+          similarity: number
+          transaction_tags: Json
+        }[]
+      }
     }
     Enums: {
       import_resolution: "pending" | "accepted" | "rejected"
@@ -490,6 +517,7 @@ export const Constants = {
     },
   },
 } as const
+
 
 
 // Helper types for easier usage

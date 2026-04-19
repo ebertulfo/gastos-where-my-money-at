@@ -1,6 +1,6 @@
 'use client'
 
-import { Check, ChevronsUpDown, Loader2, Plus, Sparkles, Trash2, X } from "lucide-react"
+import { Check, ChevronsUpDown, Loader2, Pencil, Plus, Sparkles, Trash2, X } from "lucide-react"
 import * as React from "react"
 
 import { createTag, deleteTag } from "@/app/actions/tags"
@@ -19,6 +19,7 @@ import {
     PopoverContent,
     PopoverTrigger,
 } from "@/components/ui/popover"
+import { TagEditDialog } from "@/components/ui/tag-edit-dialog"
 import { Tag } from "@/lib/supabase/database.types"
 import type { TagSuggestion } from "@/lib/suggest/types"
 import { cn } from "@/lib/utils"
@@ -50,6 +51,7 @@ export function TagInput({ selectedTags, availableTags, onTagsChange, onTagDelet
     const [isCreating, setIsCreating] = React.useState(false)
     const [suggestions, setSuggestions] = React.useState<TagSuggestion[] | null>(null)
     const [isSuggesting, setIsSuggesting] = React.useState(false)
+    const [editingTag, setEditingTag] = React.useState<Tag | null>(null)
     const suggestionsLoadedRef = React.useRef(false)
 
     // Derived state for selected IDs
@@ -106,16 +108,23 @@ export function TagInput({ selectedTags, availableTags, onTagsChange, onTagDelet
     const handleDeleteTag = async (e: React.MouseEvent, tagId: string, tagName: string) => {
         e.stopPropagation()
         if (!confirm(`Are you sure you want to delete the tag "${tagName}"?`)) return
-        
+
         try {
             await deleteTag(tagId)
-            
+
             if (onTagDelete) {
                 onTagDelete()
             }
         } catch (error) {
             console.error("Failed to delete tag", error)
         }
+    }
+
+    const handleEditTag = (e: React.MouseEvent, tag: Tag) => {
+        e.stopPropagation()
+        // Close the popover so the dialog owns the focus stack.
+        setOpen(false)
+        setEditingTag(tag)
     }
 
     const handleCreateTag = async () => {
@@ -257,20 +266,44 @@ export function TagInput({ selectedTags, availableTags, onTagsChange, onTagDelet
                                         />
                                         {tag.name}
                                     </div>
-                                    <Button
-                                        variant="ghost" 
-                                        size="icon" 
-                                        className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
-                                        onClick={(e) => handleDeleteTag(e, tag.id, tag.name)}
-                                    >
-                                        <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
-                                    </Button>
+                                    <div className="flex opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-6 w-6"
+                                            onClick={(e) => handleEditTag(e, tag)}
+                                            aria-label={`Edit ${tag.name}`}
+                                        >
+                                            <Pencil className="h-3 w-3 text-muted-foreground hover:text-foreground" />
+                                        </Button>
+                                        <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-6 w-6"
+                                            onClick={(e) => handleDeleteTag(e, tag.id, tag.name)}
+                                            aria-label={`Delete ${tag.name}`}
+                                        >
+                                            <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
+                                        </Button>
+                                    </div>
                                 </CommandItem>
                             ))}
                         </CommandGroup>
                     </CommandList>
                 </Command>
             </PopoverContent>
+            <TagEditDialog
+                open={editingTag !== null}
+                onOpenChange={(next) => {
+                    if (!next) setEditingTag(null)
+                }}
+                tag={editingTag}
+                onSaved={() => {
+                    // Server action already revalidates the surfaces; the
+                    // parent RSC page will refresh availableTags on next
+                    // navigation. Nothing to do locally.
+                }}
+            />
         </Popover>
     )
 }

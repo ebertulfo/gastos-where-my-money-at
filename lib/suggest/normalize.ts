@@ -1,5 +1,38 @@
 import { sanitizeDescription } from '@/lib/pdf/types'
 
+// ISO-3166-1 alpha-2 codes seen in merchant text, expanded to their country
+// names so a two-letter token like "JP" embeds with the full semantic weight
+// of "Japan". We expand (not replace): "AMAZON JP" becomes "AMAZON JP JAPAN"
+// so existing KNN hits on the bare code still match.
+//
+// The map deliberately excludes high-collision codes that are also common
+// English/French tokens at merchant-text frequency: IT (pronoun), IN
+// (preposition), ID (identification abbrev), DE (French preposition), MY
+// (possessive). Users from those countries still benefit via their tag
+// descriptions carrying the expansion.
+const COUNTRY_CODE_EXPANSIONS: Record<string, string> = {
+  SG: 'SINGAPORE',
+  JP: 'JAPAN',
+  US: 'UNITED STATES',
+  GB: 'UNITED KINGDOM',
+  UK: 'UNITED KINGDOM',
+  AU: 'AUSTRALIA',
+  PH: 'PHILIPPINES',
+  TH: 'THAILAND',
+  HK: 'HONG KONG',
+  CN: 'CHINA',
+  KR: 'SOUTH KOREA',
+  TW: 'TAIWAN',
+  VN: 'VIETNAM',
+  FR: 'FRANCE',
+  ES: 'SPAIN',
+  NL: 'NETHERLANDS',
+  CH: 'SWITZERLAND',
+  CA: 'CANADA',
+  NZ: 'NEW ZEALAND',
+  AE: 'UNITED ARAB EMIRATES',
+}
+
 // Bank statements pad merchant names with dates, transaction codes, currency
 // markers, and network prefixes. Stripping them before embedding makes raw
 // "STARBUCKS #4521 SG  S$7.50" line up with the cleaner forms the user has
@@ -23,6 +56,11 @@ export function normalizeForEmbedding(desc: string): string {
   s = s.replace(/#\s*\d+/g, ' ')
   s = s.replace(/\*/g, ' ')
 
+  // Strip masked card / account numbers written with literal X's
+  // (e.g. "XXXX-XXXX-XXXX-0526", "XXXX 1234"). Requires at least one run
+  // of 3+ X's so we don't clip merchant names containing an X.
+  s = s.replace(/\bX{3,}(?:[-\s]*[X\d]+)*\b/gi, ' ')
+
   // Strip common bank/payment-rail prefixes.
   s = s.replace(/\b(POS|ATM|NEFT|PAYNOW|GIRO|FAST|IBG|EFT|ACH|TXN|REF|RRN|AUTH)\b/gi, ' ')
 
@@ -40,6 +78,14 @@ export function normalizeForEmbedding(desc: string): string {
 
   // Collapse whitespace, uppercase, trim.
   s = s.replace(/\s+/g, ' ').trim().toUpperCase()
+
+  // Expand country codes. Done after uppercasing so the lookup is
+  // case-safe, and only on whole-word boundaries so we don't mangle tokens
+  // like "JPMORGAN" or "USDT". The original code stays in the string too.
+  s = s.replace(/\b([A-Z]{2})\b/g, (match, code) => {
+    const expansion = COUNTRY_CODE_EXPANSIONS[code as string]
+    return expansion ? `${code} ${expansion}` : match
+  })
 
   return s
 }

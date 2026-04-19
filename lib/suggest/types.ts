@@ -1,7 +1,16 @@
 export interface TagSuggestion {
   tagId: string
   confidence: number
-  source: 'knn' | 'llm' | 'mixed'
+  // 'tag-embed' = surfaced by cosine similarity between the transaction
+  // embedding and tag embeddings (name+description). 'mixed' = supported
+  // by more than one signal.
+  source: 'knn' | 'llm' | 'mixed' | 'tag-embed'
+}
+
+export interface TagEmbedCandidate {
+  tagId: string
+  name: string
+  similarity: number
 }
 
 export interface NeighbourTag {

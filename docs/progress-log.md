@@ -228,3 +228,44 @@ Five commits, on top of Session 9. Architecture changed twice in one session as 
 - Merchant normalization for top-merchant aggregation.
 - Pre-seeded merchant dictionaries — see "no external seed data" decision above.
 - Local sentence-transformers / pretrained DistilBERT classifiers — adds infra without enough quality win.
+
+## 2026-04-19: Tag embeddings + lowercase tags + country expansion (Session 11)
+
+**Current Status**: Suggestion quality for zero-shot cases addressed. Tags now live in the same semantic space as transactions, and a case-folded vocabulary kills the `Japan`/`japan` split.
+
+Problem that kicked this off: `MOBILE ICOCA OSAKA JP …` got no `japan`/`travel` suggestions even though the signal was obvious. Root cause was that tags were invisible to semantic search — we had transaction embeddings but nothing to compare them against besides the user's prior tagged transactions (KNN), which is empty on a cold start.
+
+### Recent Accomplishments
+
+- **Lowercase-tag migration** (`20260419000005_lowercase_tags.sql`): folds case-duplicate pairs per user (winner = earliest created; loser's `transaction_tags` repointed; `is_primary` preserved with a two-step delete-then-promote to satisfy `idx_transaction_tags_one_primary`; `tag.parent_id` references repointed before the loser delete so the FK holds). Lowercases all remaining names and adds `tags_name_lowercase_chk` so future inserts can't drift. Server-side `normalizeTagName` in `app/actions/tags.ts` lowercases at the boundary too (defence-in-depth).
+- **Tag embeddings** (`20260419000006_tag_embeddings.sql`): adds `tags.description` (text, nullable) and `tags.embedding vector(1536)`, HNSW index on embedding, and the `knn_nearest_tags(user_id, embedding, limit)` RPC. `lib/suggest/embed.ts` gains `composeTagEmbedText(name, description)` + `embedTags(supabase, ids)` mirroring `embedTransactions`. Composed text flows through `normalizeForEmbedding` so tag and transaction vectors share one space (country expansion, uppercasing, stopword stripping all consistent).
+- **LLM auto-seed for tag descriptions**: `lib/suggest/seed-tag-description.ts` asks the model for 1–2 lines of comma-separated cues (country codes, currencies, merchant names, transaction verbs — no prose) on tag creation. `createTag` insert returns immediately; `after(...)` fires the seed → description update → embed chain so the write is snappy and the tag's embedding lands in the background.
+- **Three-signal suggestion pipeline** in `lib/suggest/suggest.ts`:
+  1. Strong KNN (≥3 neighbours ≥ 0.75) — blended with tag-embed as an additive boost.
+  2. Strong tag-embed (≥2 candidates ≥ 0.35) — picks up semantically-obvious tags on first encounter.
+  3. LLM fallback — now **unions** tag-embed candidates into its output via `mergeLLMWithTagEmbed` instead of just using tag-embed to relabel overlaps as `'mixed'`. Prevents the "LLM picked `hotels, flights, activities`, dropped `japan` entirely" failure.
+  - LLM prompt softened: instead of *"If nothing fits, return an empty array. Never guess."*, it now *"Always return at least 1 tag… pick the closest option in the vocabulary so the user sees a starting point."* Empty output only when the vocabulary is truly unrelated.
+- **Country-code expansion in `normalizeForEmbedding`**: `JP` → `JP JAPAN`, `SG` → `SG SINGAPORE`, 20-code whitelist. Conservative — `IT`, `IN`, `ID`, `DE`, `MY` excluded (common English/French tokens). Runs AFTER uppercasing, expands on whole-word boundaries, keeps the raw code so existing KNN hits on bare `JP` still match. Also added a masked-card stripper (`XXXX-XXXX-XXXX-0526` → dropped) since `sanitizeDescription` only handles digit-only PAN patterns.
+- **Tag edit dialog** (`components/ui/tag-edit-dialog.tsx`): pencil icon on each tag row in `TagInput` opens a dialog with a description textarea + `Refresh AI` button (calls `generateTagDescription` → reseeds + re-embeds). New `components/ui/textarea.tsx` (shadcn), new server actions `setTagDescription`, `generateTagDescription`.
+- **New `source: 'tag-embed'`** added to `TagSuggestion` union for observability in case we ever surface source badges.
+
+### Verification
+- `npm run test:run`: 66/66 ✅ (new `normalize.test.ts` cases for country expansion + masked-card stripping + `OSAKA JP` case).
+- `npm run build`: clean ✅
+- `npx tsc --noEmit`: clean ✅
+- `npx supabase db reset`: applies all 14 migrations including the two new ones ✅.
+- Regenerated `lib/supabase/database.types.ts` with the helper-type aliases re-appended (the Supabase gen command prints `Connecting to db 5432` to stdout — must redirect stderr).
+
+### Architectural notes for future sessions
+
+- **Embeddings now live on both sides**: changing `normalizeForEmbedding` invalidates *both* transaction and tag embeddings. Still-relevant `Refresh AI` button re-embeds transactions; tag-side recovery is the per-tag `Refresh AI` inside the edit dialog (regenerates description then re-embeds). A future "rebuild all tag embeddings" admin action would be cheaper than per-tag clicks if this becomes frequent.
+- **Country expansion map is deliberately conservative**: skipping `MY/IT/IN/ID/DE` avoids false positives on common prepositions and pronouns that happen to be ISO codes. Adding more codes is cheap; the cost is false-positive pollution, not index size.
+- **`after()` callbacks in server actions**: `createTag` uses Next 16's `after(...)` from `next/server` for the seed+embed chain so the user gets the new tag back immediately. The Supabase SSR client stays in scope; no need for service-role.
+- **`is_primary` invariant during the lowercase merge**: we couldn't simply `UPDATE` both loser and winner to primary — the partial unique index blocks two primaries on the same transaction even transiently. Two-step sequence: delete loser, then promote winner.
+- **Tag-embed threshold calibration**: `TAG_EMBED_STRONG_SIMILARITY = 0.35` and `TAG_EMBED_MIN_SIMILARITY = 0.30` are eyeballed. Tag-text (name+description) vs merchant-text has a different register than merchant-vs-merchant, so absolute scores run lower than KNN's `0.75`. Revisit once we have real usage data.
+
+### Out of scope / deferred (still)
+- Dedicated `/tags` management page — tag editing now lives inside `TagInput`; a standalone page is still useful for bulk rename / merge / delete.
+- Bulk-rebuild server action for tag embeddings (covers cases where many tag names or `normalizeForEmbedding` rules change at once).
+- Source badges on the suggestion pills (`'knn' | 'tag-embed' | 'llm' | 'mixed'` is available in the payload but not rendered).
+- Tag-embed threshold auto-calibration from observed acceptance rates.

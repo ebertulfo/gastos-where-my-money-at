@@ -1,94 +1,120 @@
-# Categorization, Payments & Onboarding — Spec (v0.1)
+# Categorization, Exclusion & Onboarding — Spec (v0.3)
 
 ## Changelog
 
 | Date | Author | Description |
 | :--- | :--- | :--- |
-| 2025-12-08 | ebertulfo | Initial draft covering Categories, Payment flag, and Onboarding flow |
+| 2026-04-19 | ebertulfo | v0.3: Tag names are lowercase-only; tags gain `description` + `embedding` columns so zero-shot suggestions work from day one. New per-tag edit dialog with `Refresh AI`. Suggestion pipeline now three-signal (KNN, tag-embed, LLM) with union-merge in the LLM branch. |
+| 2026-04-19 | ebertulfo | v0.2: Reconcile with shipped code. Categories were never built — tagging replaced them. Exclusion shipped as described. Onboarding shipped via `user_settings` + country→currency selection. |
+| 2025-12-08 | ebertulfo | v0.1: Initial draft covering Categories, Payment flag, and Onboarding flow |
 
-## Objective
+## Status Summary
 
-Improve transaction management by identifying "Expenses" vs "Payments" (Credit Card) and introducing user-defined categories. Additionally, introduce an Onboarding Flow to help new users set up their categories effortlessly.
+| Original scope | Actual status |
+| :--- | :--- |
+| `categories` table + single-category assignment | **Not built.** Superseded by **tags** (many-to-many). |
+| `is_payment` flag + "Total Spend" exclusion | **Shipped**, generalized to `is_excluded` + `exclusion_reason`. |
+| Onboarding wizard (first-run) | **Shipped**, but seeds currency (not categories) via country selection. |
 
-## Scope
+This spec is retained as a record of the original intent. Read alongside the "What shipped" sections below for current behaviour.
 
-- **Schema:** New `categories` table and updates to `transactions` (`category_id`, `is_payment`).
-- **UI:** Updates to Transaction Table for assigning categories and marking payments.
-- **Onboarding:** A "First Run" experience to populate default categories.
-- **Logic:** "Total Spend" calculation updates to exclude payments.
+## 1. Tagging (shipped, replaces "Categorization")
 
-## 1. Categorization
+### Why tags instead of categories
 
-### Requirement
-- Users must be able to categorize transactions (e.g., Food, Transport, Utilities).
-- Users must have their own list of categories (customizable).
-- Transactions can have **one** category assigned.
+A single `category_id` per transaction forced a taxonomy decision we weren't ready to make for household spending that often spans multiple meaningful labels (e.g. a "Grab ride to the airport" is both `Transport` and `Travel`). Many-to-many tags let users layer labels without pre-committing to a hierarchy.
 
-### Schema Changes
+### Schema
 
-#### New Table: `categories`
-| Column | Type | Notes |
-| :--- | :--- | :--- |
-| `id` | uuid | Primary Key |
-| `user_id` | uuid | FK to `auth.users` |
-| `name` | text | Unique per user |
-| `created_at` | timestamptz | Default now() |
+Initial migration: `20251208000000_tags_and_payments.sql`. Extended by `20260419000005_lowercase_tags.sql` and `20260419000006_tag_embeddings.sql`.
 
-#### Update Table: `transactions`
-- Add `category_id` (uuid, nullable, FK to `categories.id`)
+`tags`:
+- `id` uuid pk
+- `user_id` uuid fk → `auth.users`
+- `name` text — unique per user, **lowercase-only** (enforced by `tags_name_lowercase_chk CHECK (name = lower(name))`)
+- `parent_id` uuid, nullable, self-ref — reserved for future hierarchy, not surfaced in UI today
+- `color` text, nullable
+- `description` text, nullable — embedding-friendly semantic cues (country codes, currencies, known merchants, transaction verbs). Auto-seeded by the LLM on tag creation; user-editable via the tag-edit dialog.
+- `embedding` vector(1536), nullable — `text-embedding-3-small` over `composeTagEmbedText(name, description)`. HNSW-indexed.
+- `created_at` timestamptz
 
-### UI Implication
-- **Categories Page**: Allow adding, editing, and deleting categories.
-- **Transaction Table**: Dropdown/Combobox in the row to assign a category.
+`transaction_tags` (junction):
+- `(transaction_id, tag_id)` composite pk, both cascade-deleted
+- RLS gated via subquery on `transactions.user_id`
+- `is_primary` boolean, enforced one-per-transaction by `idx_transaction_tags_one_primary`
 
-## 2. Transaction Exclusion
+### Suggestion pipeline (`lib/suggest/`)
 
-### Requirement
-- Certain transactions (payments, duplicates, transfers) should not be counted in the "Total Spend".
-- Users need to be able to mark these explicitly.
-- We generalized `is_payment` to `is_excluded` to cover all these cases.
+Triggered on-demand when the user opens `TagInput` on a transaction. Three signals, picked in order of strength:
+1. **KNN over transaction embeddings** (`knn_neighbour_tags` RPC) — votes from the user's prior tagged transactions. Dominates when ≥3 neighbours have cosine similarity ≥ 0.75.
+2. **Tag embeddings** (`knn_nearest_tags` RPC) — cosine similarity between the transaction embedding and each tag's `(name, description)` embedding. Used as the primary signal when ≥2 tags score ≥ 0.35 on a cold start; otherwise blended additively into KNN votes.
+3. **LLM fallback** (`gpt-5.4-nano` via tool-use) — picks from the user's vocabulary using weak KNN hits as few-shot. Prompt now instructs *"always return at least 1 tag"* (best-effort); tag-embed candidates are unioned onto the result so geographically-obvious tags (e.g. `japan` for a JR JP transaction) aren't dropped when the LLM picks functional categories (`hotels`, `flights`).
 
-### Schema Changes
+`normalizeForEmbedding` expands ISO country codes (`JP` → `JP JAPAN`, 20-code whitelist, false-positive-prone codes skipped) and strips `XXXX-XXXX-…` masked card patterns before embedding. Tag and transaction embeddings live in the same normalized space.
 
-#### Update Table: `transactions`
-- Add `is_excluded` (boolean, default false) - *Renamed from `is_payment`*
-- Add `exclusion_reason` (text, nullable) - *Optional context*
+### UI
 
-### UI Implication
-- **Transaction Table**: "Eye/Eye-Off" toggle button.
-- **Reason Input**: When excluding, a popover prompts for an optional reason (e.g., "Duplicate").
-- **Visuals**: Excluded rows are dimmed and strikethrough.
-- **Dashboard**: "Total Spend" filters out transactions where `is_excluded = true`.
+- **Transactions table** (`/transactions`): inline tag assignment via `components/ui/tag-input.tsx`. Creating a new tag from the input auto-inserts into `tags`, then seeds description + embedding in the background via Next's `after(...)`.
+- **Tag edit dialog** (`components/ui/tag-edit-dialog.tsx`): pencil icon on each tag row in `TagInput` opens a dialog with a description textarea + `Refresh AI` button. Saves via `setTagDescription` / `generateTagDescription` server actions; both trigger re-embedding.
+- **No standalone tag management page** yet — inline editing covers rename/delete/description. Bulk merge and `parent_id` hierarchy still deferred.
+- **Review screen** does not allow tagging (`enableTagging={false}`). Tags are applied after ingestion, on the transactions page.
 
-## 3. Onboarding Flow
+### Open follow-ups
 
-### Requirement
-- When a user accesses the app for the first time (or has no categories), prompt them to set up.
-- Reduce friction by offering "Default Categories".
+- Standalone `/tags` page for bulk operations (multi-select → merge, rename across hierarchy).
+- Tag hierarchy surfaced in UI (the `parent_id` column is already there).
+- Bulk-tag assignment (select multiple rows → apply tag).
+- Source badges on suggestion pills (the `source: 'knn' | 'tag-embed' | 'llm' | 'mixed'` field is already populated server-side).
 
-### Logic
-- **Trigger**: App Layout checks `categories` count for the current user.
-- **Condition**: If `count === 0`, Trigger Onboarding Modal.
+## 2. Transaction Exclusion (shipped as specified, generalized)
 
-### UI Flow
-1. **Welcome Modal**: "Welcome to Gastos! Let's get you set up."
-2. **Category Setup**: 
-    - "Do you have existing categories?" (Yes/No)
-    - **No**: "Here are some defaults we recommend: [Food, Transport, Utilities, Shopping...]" -> Button: "Use Defaults".
-    - **Yes**: Allow typing/adding their own list manually.
-3. **Completion**: "You're all set! Now go verify your transactions."
+### Schema
 
-## 4. Workflows & Interactions
+- `transactions.is_excluded` (boolean, default false) — migration `20251208000006` renamed `is_payment` → `is_excluded`.
+- `transactions.exclusion_reason` (text, nullable) — added in the same migration.
+- `transaction_imports.is_excluded` (boolean, default false) — added in migration `20260120000001` so the review-time decision survives the commit hop.
+- `transaction_imports.exclusion_reason` (text, nullable) — same migration.
 
-### Excluding a Transaction
-1. User sees a transaction (e.g., "DBS Payment" or "Transfer").
-2. User clicks "Exclude" (Eye-Off icon).
-3. (Optional) User enters a reason in the popover.
-4. UI updates `is_excluded = true`.
-5. "Total Spend" recalculates (subtracting that amount).
+### Behaviour
 
-### Assigning a Category
-1. User sees "Grab Transport".
-2. User clicks Category Dropdown.
-3. Selects "Transport".
-4. Database updates `category_id`.
+- Eye/Eye-Off toggle on each transaction row in both the transactions table and the review screen.
+- Toggling off opens a popover for an optional reason string (`"Duplicate"`, `"Internal transfer"`, etc.).
+- `updateTransactionExclusion` server action writes to whichever of `transactions` / `transaction_imports` owns the id — review-time exclusions are written to staging and copied into `transactions` at commit.
+- `getMonthSummary` / "Total Spend" filters excluded rows out of the sum.
+- Excluded rows render dimmed + strikethrough.
+
+## 3. Onboarding (shipped, currency-first)
+
+### Trigger
+
+`app/(dashboard)/upload/page.tsx` checks for the presence of a `user_settings` row for the current user on first render. Missing row → render `components/onboarding-wizard.tsx` over the page.
+
+### Flow
+
+1. **Welcome** — intro copy.
+2. **Region** — pick a country from a fixed list (SG / US / GB / EU / AU / MY / ID / PH / TH / JP). Country maps to a default currency, which is written to `user_settings.currency`. There is no "pick your own categories" step.
+3. **Tags (optional)** — user can seed initial tags. This step is skippable.
+4. **Success** — wizard closes; the user is on the upload page.
+
+### What did not ship
+
+- No "Here are some defaults we recommend: [Food, Transport, …]" categories step. The categories idea was replaced by tags, and there is no curated tag starter set today.
+- No "Do you already have categories?" branching.
+
+## 4. Related code
+
+| File | Role |
+| :--- | :--- |
+| `app/actions/tags.ts` | CRUD for tags + junction table |
+| `app/actions/onboarding.ts` | `completeOnboarding` — writes `user_settings` |
+| `app/actions/settings.ts` | Read/update `user_settings` |
+| `app/actions/transactions.ts` | `updateTransactionExclusion`, `setTransactionTags`, etc. |
+| `components/onboarding-wizard.tsx` | Multi-step dialog |
+| `components/transaction-table.tsx` | Tag + exclusion controls |
+| `components/ui/tag-input.tsx` | Shadcn-style multi-select with inline tag creation |
+
+## 5. Out of Scope / Future
+
+- AI-assisted categorization (M2 in `docs/ROADMAP.md`). Likely to generate **tag suggestions** rather than writing a single `category_id`.
+- Budget/target tracking (M3).
+- Rule-based auto-tagging (e.g. "every `GRAB *` transaction gets `Transport`").
