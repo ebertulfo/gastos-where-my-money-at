@@ -1,16 +1,21 @@
 # Gastos — Brand Foundations
 
-_Last updated: 2025-11-25_
+_Last updated: 2026-04-19_
 
 ---
 
 ## 1. Brand Overview
 
-**Product name:** Gastos  
-**Tagline (WIP):** Track your spending effortlessly.  
+**Parent brand:** Gastos — a family of personal-finance products.
+**Tagline (WIP):** Track your spending effortlessly.
 
-**What Gastos is:**  
-Gastos is an AI-powered, chat-first spending tracker that lets people record their expenses in seconds — by text, photo, or audio — and makes sense of their spending without forcing them into spreadsheets or complex budgeting tools.
+**Product family** (see `product-naming.md` for full detail):
+- **Gastos Spending Tracker** (iOS) — quick in-the-moment capture
+- **Gastos Spending Tracker** (Telegram bot) — quick in-the-moment capture via chat
+- **Gastos Together** (web app, this repo) — consolidate statements across accounts and household members into one shared view
+
+**What Gastos is:**
+Gastos helps individuals and households stay aware of their spending without spreadsheets or heavy budgeting tools. The Spending Tracker siblings handle fast capture (text, photo, audio). **Gastos Together** handles the opposite end: bulk statement ingestion, dedup, and a shared household view of where the money actually went.
 
 **What makes it different:**
 

@@ -1,411 +1,215 @@
-# PDF Parsing Pipeline — Spec Document (v2)
+# PDF Parsing Pipeline — Spec Document (v3)
 
 ## Changelog
 
 | Date | Author | Description |
 | :--- | :--- | :--- |
-| 2025-12-03 | ebertulfo | v2 Update: Safe parsing, statement awareness, rate limiting |
+| 2026-04-19 | ebertulfo | v3: Rewrite to reflect `pdfjs-dist`/`unpdf` layout-aware parser, 5-column output with identifiers, signed credit-card amounts, rejected-rows contract, and dual `/parse` + `/ingest` surfaces. |
+| 2025-12-03 | ebertulfo | v2: Safe parsing, statement awareness, rate limiting |
 | 2025-11-20 | ebertulfo | Initial draft |
 
 ## Objective
 
-Build a safe, **statement-aware** PDF parsing pipeline that:
+Build a **layout-aware**, statement-type-agnostic PDF parsing pipeline that:
 
-- Accepts a max 1 MB PDF.
-- Parses the PDF in-memory inside a serverless function.
-- Does NOT store the PDF anywhere (temporary or permanent).
-- **Detects statement type** (bank statement vs credit card statement).
-- Extracts transaction data using **statement-type-specific parsing**.
-- **Consolidates all pages into a single table** with consistent columns.
-- Returns the table to the client as JSON.
-- Rejects unsupported PDFs (scanned/image-based or non-tabular).
-- Enforces rate limiting (1 parse per user/IP per minute, configurable via env var).
+- Parses PDFs entirely in-memory inside a Node.js serverless function.
+- Uses **word-level x/y coordinates** (via `unpdf` → `pdfjs-dist`) to classify transaction columns, instead of regex over flat text.
+- Normalizes every transaction row into a fixed shape: `[Date, Description, Amount, Balance, Identifier]`.
+- Surfaces **rejected rows** as a first-class part of the response so a human can audit what was dropped.
+- Never persists the PDF or its extracted text anywhere (buffer stays in-memory; no disk; no external calls).
+- Supports two distinct call surfaces — a stateless `POST /api/statements/parse` (preview) and an authenticated `POST /api/statements/ingest` (persist to DB).
 
-This endpoint extracts and **normalizes transaction data**. Further categorization happens in a separate API.
+## API Surfaces
 
-## API Endpoint
+Two routes share the same extractor (`lib/pdf/extract-tables.ts` → `extractTablesAndRejections(buffer)`):
 
-`POST /api/statements/parse`
+| Concern | `POST /api/statements/parse` | `POST /api/statements/ingest` |
+| :--- | :--- | :--- |
+| Purpose | Stateless preview/inspection | Authenticated upload → DB |
+| Auth | None | Bearer token → Supabase user |
+| Max size | 1 MB | 4 MB |
+| `maxDuration` | 20 s | 30 s |
+| Rate limit | `ENABLE_RATE_LIMIT` env toggle (shared limiter) | Same |
+| Response body | `{ tables, rejectedRows }` | `{ statementId, isDuplicate?, status? }` |
+| Persistence | None | Creates `statements` + stages `transaction_imports` |
 
-### Request
+### `POST /api/statements/parse`
 
-- Content type: `multipart/form-data`
-- Field: `file` — a single `.pdf` file, ≤ 1 MB
-
-### Responses
+Request: `multipart/form-data` with a single `file` field (`application/pdf`, ≤ 1 MB).
 
 #### Success — 200
-
-Returns a **single consolidated table** with normalized columns:
-
-**Bank Statement:**
 ```json
 {
   "tables": [
     {
       "page": 1,
-      "headers": ["Date", "Description", "Amount"],
+      "headers": ["Date", "Description", "Amount", "Balance", "Identifier"],
       "rows": [
-        ["29 AUG", "GRAB *GRABTAXI", "12.50"],
-        ["29 AUG", "SHOPEE SG", "45.00"]
-      ]
+        ["01/09/2024", "GRAB *GRABTAXI", "12.50", "4188.45", "20240901-12.50-4188.45-a1b2c3d4"]
+      ],
+      "metadata": { "inferredYear": 2024 }
     }
+  ],
+  "rejectedRows": [
+    { "pageNumber": 2, "rejectionReason": "summary_section", "rawLine": "Total withdrawals 1,234.56" }
   ]
 }
 ```
 
-**Credit Card Statement:**
-```json
-{
-  "tables": [
-    {
-      "page": 1,
-      "headers": ["Date", "Description", "Amount"],
-      "rows": [
-        ["05 SEP", "APPLE.COM/BILL", "14.98"],
-        ["07 SEP", "AMAZON PRIME", "9.90"]
-      ]
-    }
-  ]
-}
+#### Errors
+
+| Condition | Status | Body |
+| :--- | :--- | :--- |
+| Invalid form data | 400 | `{ "error": "Invalid request. Expected multipart/form-data." }` |
+| Missing file | 400 | `{ "error": "Missing file. Please upload a PDF file." }` |
+| Not PDF | 400 | `{ "error": "Only PDF files are allowed." }` |
+| Too large | 413 | `{ "error": "File too large. Max size is 1 MB." }` |
+| Scanned / no tabular data | 422 | `{ "error": "No tabular data found. We only support text-based, tabular statements right now." }` |
+| No transactions extracted | 422 | `{ "error": "No transactions could be extracted from this statement." }` |
+| Rate-limited | 429 | `{ "error": "Rate limit exceeded. Try again later." }` |
+| Internal error | 500 | `{ "error": "An unexpected error occurred while processing the PDF." }` |
+
+### `POST /api/statements/ingest`
+
+Same parsing path, plus auth + persistence. Returns `{ statementId, isDuplicate, status }`. On duplicate file hash (same `uploaded_by` + `source_file_sha256`) short-circuits and returns the existing statement id with `isDuplicate: true`.
+
+## Extraction Pipeline
+
+```
+PDF buffer
+ └─ extractPageWords() via unpdf (pdfjs-dist)   → PageWords[]
+     └─ groupWordsIntoLines(words, yTol=3.0)    → TextLine[]
+         └─ selectProfile(file, name, lines)    → StatementProfile
+             └─ GenericTransactionParser.parseLines(lines, ctx)
+                 → { transactions: Transaction[], rejections: RejectedRow[] }
 ```
 
-Note: For bank statements, only **withdrawals** (expenses) are extracted. Deposits are filtered out using balance comparison logic.
+Relevant modules:
 
-#### Unsupported — 422
-```json
-{ "error": "No tabular data found. We only support text-based, tabular statements right now." }
-```
+- `lib/pdf/words.ts` — pdfjs/unpdf extractor; returns `{ pageNumber, text, words: {x0,y0,x1,y1,text}[] }`.
+- `lib/pdf/lines.ts` — groups words into `TextLine`s by y-coordinate tolerance.
+- `lib/pdf/sections.ts` — section markers (`transaction_section`, `summary_section`, `account_overview`, `investment_section`) and classifier.
+- `lib/pdf/parser.ts` — the layout-aware `GenericTransactionParser` (~650 LOC). TypeScript port of the upstream Python `src/parser.py`. Owns date detection, amount columnisation, running-balance sign inference, section gating, and rejection logging.
+- `lib/pdf/profiles.ts` — `GENERIC_PROFILE`, `ALTITUDE_PROFILE` (DBS Altitude credit card), `DBS_PROFILE` (DBS Multiplier / POSB / eMySavings). Profile is selected by scanning the first ~50 lines for brand markers; Altitude is checked first because Altitude statements also mention "DBS".
+- `lib/pdf/polyfill-promise-try.ts` — must be imported before `unpdf`; shims `Promise.try` on Node 22.14.
+- `lib/pdf/types.ts` — `ParsedTable`, `ParseSuccessResponse`, and the `sanitizeDescription()` helper.
+- `lib/pdf/extract-tables.ts` — orchestrates the pipeline, maps parser `Transaction`s to the 5-column row shape, infers `defaultYear`, and calls `appendIdentifiers()` to attach the per-row identifier via `lib/transaction-identifier.ts`.
 
-#### Too Large — 413
-```json
-{ "error": "File too large. Max size is 1 MB." }
-```
+## Row Shape & Amount Sign Convention
 
-#### Invalid — 400
-```json
-{ "error": "Only PDF files are allowed." }
-```
-```json
-{ "error": "Missing file. Please upload a PDF file." }
-```
-```json
-{ "error": "Invalid request. Expected multipart/form-data." }
-```
+Every row has exactly five cells: `[Date, Description, Amount, Balance, Identifier]`.
 
-#### Rate Limit Exceeded — 429
-```json
-{ "error": "Rate limit exceeded. Try again later." }
-```
+| Column | Format |
+| :--- | :--- |
+| `Date` | Raw statement-format date string (parser preserves the PDF's format; normalization happens at identifier time). |
+| `Description` | Sanitized via `sanitizeDescription()` (see below). |
+| `Amount` | Two-decimal fixed string. **Sign depends on profile** — see below. |
+| `Balance` | Two-decimal fixed string, or `"0.00"` fallback when not present (credit cards always get `"0.00"`). |
+| `Identifier` | `YYYYMMDD-<amount>-<balance>-<descHash8>`, see Spec 1. |
 
-## Functional Requirements
+**Amount sign by profile:**
+- `DBS_PROFILE` (bank): emits **withdrawals only**, with positive amounts. Deposits are filtered. Sign is classified via column x-band and running balance.
+- `ALTITUDE_PROFILE` (credit card): emits **all rows, signed** — credits are negative (e.g. `"-25.45"`), so summing the column reconciles with the statement's "new charges" total.
+- `GENERIC_PROFILE`: emits all rows with `Math.abs(amount)` (matches pre-port behaviour).
 
-### 1) Memory-Based Processing Only (No Storage)
+## Rejected Rows
 
-- The serverless function must:
-  - Read the uploaded file into memory (`arrayBuffer()` → `Buffer`).
-  - Process it immediately in-memory.
-  - Never write the file or extracted text to disk or external storage (e.g., Supabase).
-  - Allow the buffer to be garbage-collected after the request completes.
+The parser does not throw on ambiguous lines — it records a `RejectedRow` with a reason and continues. Reviewable reasons are surfaced in the `/parse` response; non-reviewable rejections (e.g., plain noise) are dropped silently. Typical reasons: `summary_section`, `account_overview`, `investment_section`, `embedded_date`, `continuation_noise`, `content_noise`.
 
-### 2) PDF Extraction Library
+The ingest path does **not** surface rejections to the client — they are observable only via `/parse` previews.
 
-- Runtime: Node.js (`runtime = "nodejs"` in route config)
-- Library: `pdf-parse` with page-level text extraction
-- Reject PDFs when:
-  - `data.text` is extremely short (< 50 chars) — likely a scanned/image PDF.
-  - No transaction data is detected after parsing.
+## Date Inference
 
-### 3) Statement Type Detection
+`inferDefaultYearFromText()` scans the flat combined text for year hints in this priority order:
 
-The parser automatically detects the statement type based on content patterns:
+1. Explicit "Statement date: DD Month YYYY" phrase.
+2. Any `DD/MM/YYYY` or `DD-MM-YY` tokens.
+3. Any `YYYY/MM/DD` tokens.
+4. Any `DD Month YYYY` tokens.
 
-**Bank Statement Detection:**
-```js
-/withdrawal|deposit|balance brought forward/i
-```
+If multiple years are found, the **oldest** wins (covers the "Aug 2024 statement printed in Sep 2024" case). Years > `currentYear + 1` are discarded. The resulting year is passed to the identifier generator as `defaultYear` so rows like `"19 SEP"` (no year) resolve correctly.
 
-**Credit Card Statement Detection:**
-```js
-/credit card|card number|statement date|minimum payment|previous balance/i
-```
+## Sanitization
 
-Different extraction strategies are applied based on detected type.
+Run **after extraction, before** storage / LLM calls / API response. Implementation in `lib/pdf/types.ts`:
 
-### 4) Transaction Extraction (Statement-Specific)
+| Pattern | Regex | Replacement |
+| :--- | :--- | :--- |
+| PAN-like (16 digits) | `\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b` | `<card_redacted>` |
+| Segmented account-number-like | `\b\d{3,}(-\d{3,})+\b` | `<account_redacted>` |
+| Long digit sequences (≥ 9 digits) | `\b\d{9,}\b` | `<digits_redacted>` |
+| Alphanumeric ref ids (≥ 10 chars, must contain **both** letters and digits) | `\b(?=[A-Z0-9]*[0-9])(?=[A-Z0-9]*[A-Z])[A-Z0-9]{10,}\b` | `<ref_id_redacted>` |
 
-#### Bank Statements
-
-1. Parse page-by-page using `pdf-parse` page extraction.
-2. Detect transaction lines by date patterns at line start.
-3. Handle **multi-line transactions** where descriptions span multiple lines.
-4. Extract column positions from header line for accurate amount mapping.
-5. Parse into intermediate format: `[Date, Description, TransactionAmount, Balance]`
-6. **Filter to withdrawals only** using balance comparison:
-   - Track running balance across transactions.
-   - If `currentBalance < previousBalance`, it's a withdrawal (include).
-   - If `currentBalance >= previousBalance`, it's a deposit (exclude).
-7. Output final format: `[Date, Description, Amount]`
-
-#### Credit Card Statements
-
-1. Parse page-by-page.
-2. Detect transaction lines by date patterns.
-3. Handle multi-line descriptions.
-4. Extract **column amounts** (rightmost amount separated by whitespace).
-5. Filter out non-transaction lines (preamble, card info, summary rows).
-6. Output format: `[Date, Description, Amount]`
-
-### 5) Date Pattern Recognition
-
-Supported date formats:
-```js
-/^\d{1,2}\s+(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\b/i  // "29 AUG"
-/^\d{1,2}\/\d{1,2}\/\d{2,4}/                                         // "05/09/2024"
-/^\d{1,2}-\d{1,2}-\d{2,4}/                                           // "05-09-2024"
-/^\d{1,2}\s+\w{3}\s+\d{2,4}/                                         // "05 Sep 2024"
-```
-
-### 6) Output Format
-
-Returns a **single consolidated table** combining all pages:
-
-```ts
-type ParsedTable = {
-  page: number;              // Always 1 (represents "all pages")
-  headers: string[] | null;  // ["Date", "Description", "Amount"]
-  rows: string[][];          // Transaction data
-  /** Optional metadata extracted from the parser context */
-  metadata?: {
-    inferredYear?: number;   // Year inferred from statement text (e.g. "Sep 2024")
-  };
-};
-
-type ParseSuccessResponse = {
-  tables: ParsedTable[];     // Always contains exactly one table
-};
-
-type ParseErrorResponse = {
-  error: string;
-};
-```
-
-### 7) Filtered Content
-
-The following are automatically filtered out:
-
-**Summary/End Lines:**
-- Total rows, balance carried forward
-- Interest credit summaries
-- Lines starting with dashes (separators)
-
-**Non-Transaction Lines:**
-- Statement preamble (dates, limits, due dates)
-- Card number patterns
-- Payment credits (ending with "CR")
-- Balance B/F rows (used for balance tracking only)
-
-### 8) Rate Limiting
-
-- **Configurable** via `ENABLE_RATE_LIMIT` environment variable.
-- When enabled (`ENABLE_RATE_LIMIT=true`): Enforce one parse per 60 seconds per IP.
-- When disabled (default): No rate limiting applied.
-- If the limit is exceeded, return `429`.
-- Implementation: In-memory store (suitable for single-instance deployments).
-
-## Serverless Implementation Notes
-
-### Runtime Configuration
-
-```ts
-// Ensure Node.js runtime for pdf-parse compatibility
-export const runtime = "nodejs";
-
-// Allow up to 20 seconds for PDF processing
-export const maxDuration = 20;
-```
-
-### Validation Order
-
-1. Check rate limit (if enabled)
-2. Parse multipart form data
-3. Validate file presence
-4. Validate file type (PDF only)
-5. Read file into buffer
-6. Validate file size (≤ 1 MB)
-7. Extract tables
-
-### PDF Parsing
-
-```ts
-import { PDFParse } from "pdf-parse";
-
-const parser = new PDFParse({ data: buffer });
-const textResult = await parser.getText();
-// Access pages via textResult.pages
-await parser.destroy(); // Clean up resources
-```
-
-## Helper Functions Implemented
-
-1. **`extractTablesFromPdf(buffer: Buffer): Promise<ParsedTable[]>`**
-   - Main entry point
-   - Detects statement type (bank vs credit card)
-   - Routes to appropriate extraction function
-   - Consolidates all pages into single table
-   - Filters withdrawals only for bank statements
-
-2. **`extractTablesFromPageText(pageText: string, pageNumber: number): ParsedTable[]`**
-   - Handles bank statement pages
-   - Uses column position detection from headers
-   - Groups multi-line transactions
-   - Returns intermediate format with all columns
-
-3. **`extractCreditCardTransactions(pageText: string, pageNumber: number): ParsedTable[]`**
-   - Handles credit card statement pages
-   - Detects column amounts (rightmost, whitespace-separated)
-   - Handles multi-line descriptions
-   - Filters non-transaction content
-
-4. **`parseMultiLineTransaction(lines: string[]): string[] | null`**
-   - Parses multi-line bank transactions
-   - Returns `[Date, Description, TransactionAmount, Balance]`
-
-5. **`extractHeaderColumnPositions(headerLine: string): ColumnInfo[]`**
-   - Extracts column positions from header line
-   - Used for accurate amount-to-column mapping
-
-6. **`startsWithDate(line: string): boolean`** / **`extractDate(line: string): string | null`**
-   - Date pattern detection and extraction
-
-7. **`extractColumnAmount(line: string): string | null`**
-   - Extracts amount from column position (rightmost)
-
-8. **`isSummaryOrEndLine(line: string): boolean`** / **`isNonTransactionLine(line: string): boolean`**
-   - Content filtering helpers
-
-9. **`guessHeaders(rows: string[][]): string[] | null`**
-   - Heuristic header detection (all cells contain letters)
-
-## Error Handling
-
-| Condition | Response | Notes |
-|---|---:|---|
-| Rate limit exceeded | 429 | Only when ENABLE_RATE_LIMIT=true |
-| Invalid form data | 400 | Expected multipart/form-data |
-| Missing file | 400 | File field required |
-| Not PDF | 400 | Reject early |
-| PDF > 1 MB | 413 | Enforced after reading buffer |
-| Scanned PDF (image-based) | 422 | Empty or minimal text (< 50 chars) |
-| No transactions detected | 422 | "Unsupported PDF" |
-| Internal errors | 500 | Log server-side only, generic message to client |
-
-## Custom Error Class
-
-```ts
-export class UnsupportedPdfError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "UnsupportedPdfError";
-  }
-}
-```
+The alphanumeric rule requires both letter and digit to avoid masking merchant names like `MYREPUBLIC` or `STARBUCKS`. Masks use `<type_redacted>` tags (not asterisks) so the mask self-describes what was removed.
 
 ## Security Requirements
 
-- Never store the PDF or extracted text.
-- Never log PDF bytes or full extracted text.
-- Do not write temporary files to disk.
-- Do not send raw PDFs to any external service.
-- Do not call LLMs inside this endpoint — all processing stays in your infra.
-- Enforce strict rate limits and validation.
-- Clean up parser resources with `parser.destroy()`.
+- Never write the buffer or extracted text to disk.
+- Never log raw descriptions or page text. Rejection logs include the raw line for debugging — they stay server-side except through the `/parse` response, which is stateless.
+- Never send PDFs to external services.
+- No LLM calls in this path.
+- `unpdf`/`pdfjs-dist` resources are released automatically when the promise resolves; the buffer is eligible for GC immediately after `extractPageWords` returns.
 
-## 🔒 Sanitization & Safety Layer (Mandatory)
+## Validation Order (`/parse`)
 
-All extracted transactions must be sanitized before being stored, sent to an LLM, or returned through the API.
+1. Rate-limit check (if enabled).
+2. Parse multipart form-data.
+3. Validate file presence + MIME type.
+4. Read into `Buffer`.
+5. Validate size after read (more accurate than Content-Length).
+6. Run `extractTablesAndRejections(buffer)`.
+7. Return `{ tables, rejectedRows }` or map `UnsupportedPdfError` → 422.
 
-### Sanitization Rules
+`/ingest` inserts: (a) bearer-token auth and user resolution immediately before step 2, (b) `statements` + `transaction_imports` inserts after step 6 via `lib/db/ingest.ts`.
 
-Mask harmful numeric/identifier patterns inside the **Description** field:
+## Non-Goals
 
-| Pattern | Regex | Replacement |
-|---------|-------|-------------|
-| Card-number-like sequences (PAN-like) | `\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b` | `****-****-****-****` |
-| Segmented account-number-like sequences | `\b\d{3,}(-\d{3,})+\b` | `**********` |
-| Long digit sequences (≥ 9 digits) | `\b\d{9,}\b` | `**********` |
-| Long alphanumeric reference IDs (mixed letters+digits, 10+ chars) | `\b(?=[A-Z0-9]*[0-9])(?=[A-Z0-9]*[A-Z])[A-Z0-9]{10,}\b` | `<ref_id_redacted>` |
-
-**Note:** The alphanumeric pattern requires BOTH letters AND digits to avoid masking merchant names like "MYREPUBLIC" or "STARBUCKS".
-
-### Sanitization Function
-
-```ts
-export function sanitizeDescription(desc: string): string {
-  return desc
-    .replace(/\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b/g, "****-****-****-****")
-    .replace(/\b\d{3,}(-\d{3,})+\b/g, "**********")
-    .replace(/\b\d{9,}\b/g, "**********")
-    .replace(/\b(?=[A-Z0-9]*[0-9])(?=[A-Z0-9]*[A-Z])[A-Z0-9]{10,}\b/g, "<ref_id_redacted>");
-}
-```
-
-### Pipeline Placement
-
-Run sanitization **after extraction** and **before**:
-- Deduplication
-- DB storage
-- LLM calls
-- API response
-
-### Purpose
-
-- Prevent storage of PCI-adjacent identifiers
-- Prevent raw account/card leakage
-- Keep transactions useful but non-compromising
-
-## Non-Goals (Out of Scope)
-
-- Transaction categorization (handled by `/api/statements/interpret`).
-- Currency detection or normalization.
-- Handling scanned PDFs / OCR.
-- Multiple account support within single statement.
-- UI for table selection or confirmation.
-- Saving transactions to a database.
-
-These features belong to later stages of the pipeline.
+- Categorization / merchant normalization (lives downstream of ingest).
+- OCR or scanned-PDF support.
+- Currency detection (currency comes from statement metadata or `user_settings`).
+- UI for table selection or row editing.
 
 ## Implementation Status
 
-- [x] API route: `POST /api/statements/parse`
-- [x] File validation (type, size)
-- [x] Rate limiting (configurable)
-- [x] PDF text extraction via pdf-parse
-- [x] Statement type detection (bank vs credit card)
-- [x] Bank statement parsing with multi-line support
-- [x] Credit card statement parsing
-- [x] Withdrawal filtering for bank statements
-- [x] Single consolidated table output
-- [x] Error handling with custom UnsupportedPdfError
-- [x] TypeScript types for responses
-- [x] Sanitization layer for sensitive data
-- [x] Sanitization tests (26 passing)
+- [x] `POST /api/statements/parse` (stateless preview)
+- [x] `POST /api/statements/ingest` (authenticated persist)
+- [x] `unpdf`/`pdfjs-dist` word-coord extraction
+- [x] Layout-aware parser with section classifier + profiles
+- [x] Rejected-row surfacing for audit
+- [x] Signed credit-card amounts (Altitude)
+- [x] Withdrawal-only filter for bank statements (DBS)
+- [x] `defaultYear` inference for missing-year dates
+- [x] Per-row identifier generation (Spec 1)
+- [x] Sanitization with `<type_redacted>` masks
+- [x] Unit tests in `lib/pdf/__tests__/`
 
 ## File Structure
 
 ```
 lib/
   pdf/
-    extract-tables.ts   # Core extraction logic
-    types.ts            # TypeScript types + sanitizeDescription
+    extract-tables.ts         # Orchestrator + 5-column row mapping
+    parser.ts                 # GenericTransactionParser (layout-aware)
+    profiles.ts               # GENERIC / ALTITUDE / DBS
+    sections.ts               # Section markers + classifier
+    lines.ts                  # Word → TextLine grouping
+    words.ts                  # unpdf/pdfjs word extraction
+    models.ts                 # Transaction / RejectedRow types
+    types.ts                  # ParsedTable / sanitizeDescription
+    polyfill-promise-try.ts   # Node 22.14 shim (must import first)
     __tests__/
-      sanitize.test.ts  # Sanitization tests
-  rate-limit.ts         # Rate limiting implementation
+      parser.test.ts
+      lines.test.ts
+      sanitize.test.ts
+  rate-limit.ts               # In-memory limiter (env-gated)
+  transaction-identifier.ts   # Per-row identifier (see Spec 1)
+  db/
+    ingest.ts                 # statements + transaction_imports writer
 app/
   api/
     statements/
-      parse/
-        route.ts        # API endpoint
+      parse/route.ts          # Preview endpoint
+      ingest/route.ts         # Authenticated persist endpoint
 ```
 
 ---
