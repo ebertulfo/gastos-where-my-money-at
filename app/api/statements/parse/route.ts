@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { checkRateLimit } from "@/lib/rate-limit";
 import {
-  extractTablesFromPdf,
+  extractTablesAndRejections,
   UnsupportedPdfError,
 } from "@/lib/pdf/extract-tables";
 import type { ParseSuccessResponse, ParseErrorResponse } from "@/lib/pdf/types";
@@ -79,9 +79,19 @@ export async function POST(
     }
 
     // Extract tables from PDF
-    const tables = await extractTablesFromPdf(buffer);
+    const { tables, rejectedRows } = await extractTablesAndRejections(buffer);
 
-    return NextResponse.json({ tables }, { status: 200 });
+    return NextResponse.json(
+      {
+        tables,
+        rejectedRows: rejectedRows.map((r) => ({
+          pageNumber: r.pageNumber,
+          rejectionReason: r.rejectionReason,
+          rawLine: r.rawLine,
+        })),
+      },
+      { status: 200 }
+    );
   } catch (error) {
     // Handle unsupported PDF errors (scanned, no tables, etc.)
     if (error instanceof UnsupportedPdfError) {

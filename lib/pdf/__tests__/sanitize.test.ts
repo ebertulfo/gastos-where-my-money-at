@@ -5,45 +5,45 @@ describe("sanitizeDescription", () => {
   describe("card-number-like sequences (PAN-like)", () => {
     it("masks 16-digit numbers with spaces", () => {
       expect(sanitizeDescription("PAYMENT 1234 5678 9012 3456 RECEIVED")).toBe(
-        "PAYMENT ****-****-****-**** RECEIVED"
+        "PAYMENT <card_redacted> RECEIVED"
       );
     });
 
     it("masks 16-digit numbers with dashes", () => {
       expect(sanitizeDescription("CARD 1234-5678-9012-3456 USED")).toBe(
-        "CARD ****-****-****-**** USED"
+        "CARD <card_redacted> USED"
       );
     });
 
     it("masks 16-digit numbers without separators", () => {
       expect(sanitizeDescription("REF 1234567890123456 DONE")).toBe(
-        "REF ****-****-****-**** DONE"
+        "REF <card_redacted> DONE"
       );
     });
 
     it("masks multiple card numbers in same string", () => {
       expect(
         sanitizeDescription("FROM 1234567890123456 TO 9876543210987654")
-      ).toBe("FROM ****-****-****-**** TO ****-****-****-****");
+      ).toBe("FROM <card_redacted> TO <card_redacted>");
     });
   });
 
   describe("segmented account-number-like sequences", () => {
     it("masks account numbers like 123-456-789", () => {
       expect(sanitizeDescription("ACCT 123-456-789 TRANSFER")).toBe(
-        "ACCT ********** TRANSFER"
+        "ACCT <account_redacted> TRANSFER"
       );
     });
 
     it("masks longer segmented numbers", () => {
       expect(sanitizeDescription("REF 1234-5678-9012 PAYMENT")).toBe(
-        "REF ********** PAYMENT"
+        "REF <account_redacted> PAYMENT"
       );
     });
 
     it("masks multiple segmented numbers", () => {
       expect(sanitizeDescription("FROM 111-222-333 TO 444-555-666")).toBe(
-        "FROM ********** TO **********"
+        "FROM <account_redacted> TO <account_redacted>"
       );
     });
   });
@@ -51,13 +51,13 @@ describe("sanitizeDescription", () => {
   describe("long digit sequences (9+ digits)", () => {
     it("masks 9-digit sequences", () => {
       expect(sanitizeDescription("REF 123456789 COMPLETE")).toBe(
-        "REF ********** COMPLETE"
+        "REF <digits_redacted> COMPLETE"
       );
     });
 
     it("masks 12-digit sequences", () => {
       expect(sanitizeDescription("TXN 123456789012 PROCESSED")).toBe(
-        "TXN ********** PROCESSED"
+        "TXN <digits_redacted> PROCESSED"
       );
     });
 
@@ -143,14 +143,14 @@ describe("sanitizeDescription", () => {
     it("handles multiple sensitive patterns in one string", () => {
       const input = "TRANSFER 1234567890123456 REF ABC1234567890 ACCT 123-456-789";
       const expected =
-        "TRANSFER ****-****-****-**** REF <ref_id_redacted> ACCT **********";
+        "TRANSFER <card_redacted> REF <ref_id_redacted> ACCT <account_redacted>";
       expect(sanitizeDescription(input)).toBe(expected);
     });
 
     it("handles mixed content with merchant name and card number", () => {
       expect(
         sanitizeDescription("GRAB PAYMENT 1234-5678-9012-3456 SINGAPORE")
-      ).toBe("GRAB PAYMENT ****-****-****-**** SINGAPORE");
+      ).toBe("GRAB PAYMENT <card_redacted> SINGAPORE");
     });
   });
 
