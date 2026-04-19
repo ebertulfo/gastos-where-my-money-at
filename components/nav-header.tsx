@@ -35,9 +35,9 @@ export function NavHeader() {
                             </Link>
                         </Button>
                         <Button variant="ghost" size="sm" asChild>
-                            <Link href="/summary" className="flex items-center gap-2">
+                            <Link href="/insights" className="flex items-center gap-2">
                                 <BarChart3 className="h-4 w-4" />
-                                Summary
+                                Insights
                             </Link>
                         </Button>
                     </nav>
