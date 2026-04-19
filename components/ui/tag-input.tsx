@@ -93,7 +93,8 @@ export function TagInput({ selectedTags, availableTags, onTagsChange, onTagDelet
         } else {
             onTagsChange([...selectedIds, tagId])
         }
-        setOpen(false) 
+        // Keep the popover open so users can add multiple tags in one go;
+        // click-outside still closes via Popover's onOpenChange.
         setInputValue("")
     }
 
@@ -125,12 +126,8 @@ export function TagInput({ selectedTags, availableTags, onTagsChange, onTagDelet
             if (newTag) {
                 onTagsChange([...selectedIds, newTag.id])
                 setInputValue("")
-                setOpen(false) 
-                
-                // Add to availableTags? 
-                // We can't mutate props directly, but we can assume parent will refetch 
-                // or we can pass a callback to "addAvailableTag" if we want instant availability for others.
-                // For now, let's just ensure we clear UI state.
+                // Keep popover open so users can add multiple tags / a fresh
+                // creation followed by another existing tag in one flow.
             }
         } catch (error) {
             console.error("Failed to create tag", error)

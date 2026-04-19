@@ -122,12 +122,17 @@ export async function assignTagsToTransaction(transactionId: string, tagIds: str
         return
     }
 
+    // Exactly one row per transaction must have is_primary=true (enforced by
+    // idx_transaction_tags_one_primary). The first tag in the input becomes
+    // primary; the rest are secondaries. The default for the column is true,
+    // so we MUST set is_primary=false explicitly on the others.
     const { error: insertError } = await supabase
         .from('transaction_tags')
         .insert(
-            tagIds.map((tagId) => ({
+            tagIds.map((tagId, i) => ({
                 transaction_id: transactionId,
                 tag_id: tagId,
+                is_primary: i === 0,
             })) as any
         )
 
