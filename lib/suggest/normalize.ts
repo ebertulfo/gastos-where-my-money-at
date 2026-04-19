@@ -26,8 +26,17 @@ export function normalizeForEmbedding(desc: string): string {
   // Strip common bank/payment-rail prefixes.
   s = s.replace(/\b(POS|ATM|NEFT|PAYNOW|GIRO|FAST|IBG|EFT|ACH|TXN|REF|RRN|AUTH)\b/gi, ' ')
 
-  // Strip trailing/embedded 2-letter country codes that some banks tack on.
-  s = s.replace(/\b(SG|US|GB|UK|MY|ID|PH|TH|JP|AU|CA|NZ|HK|EU|AE|DE|FR)\b/g, ' ')
+  // NOTE: We deliberately do NOT strip country codes (SG, JP, US, …). They
+  // carry meaningful signal — "AMAZON JP" vs "AMAZON" should embed
+  // differently because the user often categorises them differently
+  // (Travel/Japan vs Shopping). Same for currency codes attached to merchant
+  // names like "ALIPAY HK".
+
+  // Catch any remaining standalone integers ≥3 digits — these are leftover
+  // amounts (esp. JPY/IDR with no decimal), reference codes, or store
+  // numbers. Two-digit numbers are kept (street numbers, "F&B 24" outlet
+  // names, etc.).
+  s = s.replace(/\b\d{3,}\b/g, ' ')
 
   // Collapse whitespace, uppercase, trim.
   s = s.replace(/\s+/g, ' ').trim().toUpperCase()

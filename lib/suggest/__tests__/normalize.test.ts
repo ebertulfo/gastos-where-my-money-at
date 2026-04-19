@@ -27,15 +27,22 @@ describe('normalizeForEmbedding', () => {
     expect(out).toBe('STARBUCKS')
   })
 
-  it('strips bank/payment-rail prefixes (and trailing country codes)', () => {
-    expect(normalizeForEmbedding('POS GRAB SG')).toBe('GRAB')
+  it('strips bank/payment-rail prefixes but preserves country codes', () => {
+    expect(normalizeForEmbedding('POS GRAB SG')).toBe('GRAB SG')
     expect(normalizeForEmbedding('PAYNOW TRANSFER TO JOHN')).toBe('TRANSFER TO JOHN')
     expect(normalizeForEmbedding('ATM WITHDRAWAL')).toBe('WITHDRAWAL')
   })
 
+  it('preserves country/locale tokens that carry categorisation signal', () => {
+    // "AMAZON JP" must embed differently from "AMAZON" so a Japan-focused
+    // user can train KNN on JP-prefixed merchants.
+    expect(normalizeForEmbedding('AMAZON JP 2024-04-15 JPY 1500')).toBe('AMAZON JP')
+    expect(normalizeForEmbedding('ALIPAY HK 2024-04-15')).toBe('ALIPAY HK')
+  })
+
   it('combines multiple noise sources into a clean merchant string', () => {
     const out = normalizeForEmbedding('POS GRAB*RIDE #1234 2024-04-15 SG  S$18.20')
-    expect(out).toBe('GRAB RIDE')
+    expect(out).toBe('GRAB RIDE SG')
   })
 
   it('uppercases and collapses whitespace', () => {

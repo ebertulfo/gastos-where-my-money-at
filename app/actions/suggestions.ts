@@ -22,22 +22,32 @@ export async function suggestTagsForTransactionAction(
 }
 
 /**
- * One-shot backfill for transactions that predate the embeddings column.
- * Operates on the current user only. Idempotent: rows that already have
- * embeddings are skipped.
+ * Backfill embeddings for the current user's transactions.
+ *
+ * - Default (`force=false`): only rows where `description_embedding is null`
+ *   get embedded. Cheap and idempotent — safe to call on page load.
+ * - `force=true`: re-embeds every row regardless of current state. Use after
+ *   meaningful changes to the normalize regex (e.g. when we stop stripping a
+ *   token that turns out to carry signal). Costs tokens.
  */
-export async function backfillTransactionEmbeddings(): Promise<{ embedded: number }> {
+export async function backfillTransactionEmbeddings(
+  options: { force?: boolean } = {},
+): Promise<{ embedded: number }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { embedded: 0 }
 
-  const { data, error } = await (supabase as any)
+  let query = (supabase as any)
     .from('transactions')
     .select('id')
     .eq('user_id', user.id)
-    .is('description_embedding', null)
     .limit(2000)
 
+  if (!options.force) {
+    query = query.is('description_embedding', null)
+  }
+
+  const { data, error } = await query
   if (error || !data) return { embedded: 0 }
   const ids = (data as { id: string }[]).map(r => r.id)
   return embedTransactions(supabase, ids)

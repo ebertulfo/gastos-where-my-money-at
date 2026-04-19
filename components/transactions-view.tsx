@@ -11,11 +11,13 @@ import {
     SelectValue,
 } from '@/components/ui/select'
 import { formatCurrency } from '@/lib/utils'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Loader2, Sparkles } from 'lucide-react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
-import { startTransition, useOptimistic } from 'react'
+import { startTransition, useOptimistic, useState } from 'react'
+import { toast } from 'sonner'
 
 // Types
+import { backfillTransactionEmbeddings } from '@/app/actions/suggestions'
 import { assignTagsToTransaction } from '@/app/actions/tags'
 import type { Tag } from '@/lib/supabase/database.types'
 import type { MonthSummary, Transaction } from '@/lib/types/transaction'
@@ -108,12 +110,39 @@ export function TransactionsView({
         }
     }
 
+    const [isRefreshingAI, setIsRefreshingAI] = useState(false)
+    const handleRefreshAI = async () => {
+        setIsRefreshingAI(true)
+        try {
+            const result = await backfillTransactionEmbeddings({ force: true })
+            toast.success(`Refreshed AI suggestions for ${result.embedded} transactions`)
+        } catch {
+            toast.error('Failed to refresh AI suggestions')
+        } finally {
+            setIsRefreshingAI(false)
+        }
+    }
+
     return (
         <div className="container py-8">
             {/* Header */}
             <div className="flex items-center justify-between mb-8">
                 <h1 className="text-2xl font-bold">Transactions</h1>
-                <div className="flex gap-4">
+                <div className="flex items-center gap-3">
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleRefreshAI}
+                        disabled={isRefreshingAI}
+                        title="Re-embed all transactions so AI suggestions reflect the latest tagging signal."
+                    >
+                        {isRefreshingAI ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                            <Sparkles className="h-4 w-4" />
+                        )}
+                        <span className="ml-1.5 text-xs">Refresh AI</span>
+                    </Button>
                     {availableStatements.length > 0 && (
                         <Select
                             value={searchParams.get('statement') || 'all'}
