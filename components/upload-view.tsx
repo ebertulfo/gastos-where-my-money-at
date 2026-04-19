@@ -72,7 +72,7 @@ export function UploadView({ initialRecentImports, needsOnboarding }: UploadView
               <Sparkles className="h-4 w-4 text-primary mt-0.5" />
               <AlertDescription className="flex-1 text-sm">
                 After upload, AI suggests tags from your existing categories. Sanitised transaction
-                descriptions are sent to Anthropic for processing.
+                descriptions are sent to OpenAI for processing.
               </AlertDescription>
               <Button
                 variant="ghost"

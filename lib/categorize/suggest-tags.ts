@@ -4,8 +4,7 @@ import { sanitizeDescription } from '@/lib/pdf/types'
 import {
   CATEGORIZE_MODEL,
   estimateUsageCents,
-  getAnthropicClient,
-  type UsageTokens,
+  getOpenAIClient,
 } from './client'
 import { buildSystemPrompt, buildUserPrompt, SUGGEST_TAGS_TOOL_INPUT_SCHEMA, SUGGEST_TAGS_TOOL_NAME } from './prompts'
 import { checkBudget, incrementSpend } from './budget'
@@ -18,9 +17,9 @@ import type {
 
 const BATCH_SIZE = 50
 
-// Cap concurrent Anthropic calls across the whole process. Bulk uploads
-// would otherwise fan out one in-flight call per statement, hitting the
-// per-org rate limit.
+// Cap concurrent OpenAI calls across the whole process. Bulk uploads would
+// otherwise fan out one in-flight call per statement, hitting the per-org
+// rate limit.
 const limiter = pLimit(2)
 
 interface RawSuggestion {
@@ -44,46 +43,49 @@ async function suggestBatch(
   rows: SuggestionInputRow[],
   tags: TagVocabularyEntry[]
 ): Promise<SuggestBatchResult> {
-  const client = getAnthropicClient()
+  const client = getOpenAIClient()
   if (!client) {
-    throw new Error('No Anthropic client configured')
+    throw new Error('No OpenAI client configured')
   }
 
   const validTagIds = new Set(tags.map(t => t.id))
 
-  const response = await client.messages.create({
+  const response = await client.chat.completions.create({
     model: CATEGORIZE_MODEL,
-    max_tokens: 2048,
-    system: [
-      {
-        type: 'text',
-        text: buildSystemPrompt(tags),
-        cache_control: { type: 'ephemeral' },
-      },
+    messages: [
+      { role: 'system', content: buildSystemPrompt(tags) },
+      { role: 'user', content: buildUserPrompt(rows) },
     ],
     tools: [
       {
-        name: SUGGEST_TAGS_TOOL_NAME,
-        description: 'Record suggested tag IDs for each input transaction.',
-        input_schema: SUGGEST_TAGS_TOOL_INPUT_SCHEMA,
+        type: 'function',
+        function: {
+          name: SUGGEST_TAGS_TOOL_NAME,
+          description: 'Record suggested tag IDs for each input transaction.',
+          parameters: SUGGEST_TAGS_TOOL_INPUT_SCHEMA,
+        },
       },
     ],
-    tool_choice: { type: 'tool', name: SUGGEST_TAGS_TOOL_NAME },
-    messages: [
-      { role: 'user', content: buildUserPrompt(rows) },
-    ],
+    tool_choice: { type: 'function', function: { name: SUGGEST_TAGS_TOOL_NAME } },
   })
 
-  const toolUse = response.content.find(b => b.type === 'tool_use')
-  if (!toolUse || toolUse.type !== 'tool_use') {
-    throw new Error('No tool_use block in response')
+  const choice = response.choices[0]
+  const toolCall = choice?.message?.tool_calls?.[0]
+  if (!toolCall || toolCall.type !== 'function') {
+    throw new Error('No tool call in response')
   }
 
-  const raw = (toolUse.input as { suggestions?: RawSuggestion[] })?.suggestions ?? []
+  let parsed: { suggestions?: RawSuggestion[] }
+  try {
+    parsed = JSON.parse(toolCall.function.arguments)
+  } catch {
+    throw new Error('Tool call arguments were not valid JSON')
+  }
+
+  const raw = parsed.suggestions ?? []
 
   // Strip any IDs the model hallucinated outside the vocabulary. Map by
-  // tempId so we always emit one row per input even if the model skipped
-  // some.
+  // tempId so we always emit one row per input even if the model skipped some.
   const byTempId = new Map<string, string[]>()
   for (const s of raw) {
     const filtered = (s.tagIds ?? []).filter(id => validTagIds.has(id))
@@ -95,12 +97,12 @@ async function suggestBatch(
     suggestedTagIds: byTempId.get(r.tempId) ?? [],
   }))
 
-  const usage = response.usage as unknown as Partial<UsageTokens & { cache_read_input_tokens?: number; cache_creation_input_tokens?: number; input_tokens: number; output_tokens: number }>
+  const usage = response.usage
+  const cachedInputTokens = usage?.prompt_tokens_details?.cached_tokens ?? 0
   const usageCents = estimateUsageCents({
-    inputTokens: usage.input_tokens ?? 0,
-    outputTokens: usage.output_tokens ?? 0,
-    cacheReadInputTokens: usage.cache_read_input_tokens ?? 0,
-    cacheCreationInputTokens: usage.cache_creation_input_tokens ?? 0,
+    inputTokens: usage?.prompt_tokens ?? 0,
+    outputTokens: usage?.completion_tokens ?? 0,
+    cachedInputTokens,
   })
 
   return {
@@ -190,7 +192,7 @@ export async function suggestTagsForStatement(statementId: string): Promise<Sugg
         amount: i.amount,
       }))
 
-      const client = getAnthropicClient()
+      const client = getOpenAIClient()
       if (!client) {
         await markStatementImportsStatus(statementId, 'disabled')
         return { status: 'disabled', reason: 'no_api_key' }
