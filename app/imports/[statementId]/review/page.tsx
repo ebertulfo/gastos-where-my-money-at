@@ -52,25 +52,26 @@ export default function ReviewPage({ params }: ReviewPageProps) {
     } = useStatementReview(statementId)
 
     const handleConfirm = async () => {
-        const success = await confirmImport()
-        if (success) {
-            // Smart Redirect: Find next pending statement
-            // We need to refresh the pending list or check our local state
-            // Let's perform a fresh check to be sure
-            try {
-                const updatedPending = await getPendingStatements()
-                const nextStatement = updatedPending.find(s => s.id !== statementId)
+        const result = await confirmImport()
+        if (!result.success) return
 
-                if (nextStatement) {
-                    router.push(`/imports/${nextStatement.id}/review`)
-                } else {
-                    router.push('/transactions?month=2025-12')
-                }
-            } catch (e) {
-                // Fallback
-                router.push('/transactions?month=2025-12')
+        // Next pending statement → continue review chain. Otherwise land on
+        // the month the just-confirmed statement covers (so the user sees
+        // the rows they just imported).
+        try {
+            const updatedPending = await getPendingStatements()
+            const nextStatement = updatedPending.find(s => s.id !== statementId)
+
+            if (nextStatement) {
+                router.push(`/imports/${nextStatement.id}/review`)
+                return
             }
+        } catch (e) {
+            // Fall through to transactions redirect.
         }
+
+        const monthQuery = result.targetMonth ? `?month=${result.targetMonth}` : ''
+        router.push(`/transactions${monthQuery}`)
     }
 
     if (isLoading) {

@@ -108,26 +108,6 @@ export function TransactionsView({
         }
     }
 
-    // Since we are using router.refresh, loading state is handled by Next.js loading.js or Suspense fallback
-    // But for local interactions like tagging, it's instant.
-
-    // We need to pass a custom handler to TransactionTable to bypass its default internal logic
-    // But TransactionTable uses TransactionRow which uses TagInput.
-    // We can pass `onTransactionUpdate` to trigger refresh, but that's for the old way.
-    // The cleanest way (without rewriting Table/Row significantly) would be to let Row do the mutation?
-    // No, we want Optimistic UI.
-    
-    // We will pass the optimistic transactions to the table.
-    // AND we need to intercept the tag update.
-    // Current TransactionTable accepts `onTransactionUpdate` but that is called AFTER mutation.
-    // We need `onTagsChange` prop on TransactionTable -> Row.
-    
-    // For this step, I will assume we modify TransactionTable/Row to accept an external handler `onTagsChange`
-    // If not, revert to standard non-optimistic refetch for now.
-    // Let's modify TransactionTable/Row next to accept `onTagsChange`.
-
-    // TEMP: I will define a wrapper for now to pass to TransactionTable if we modify it.
-    
     return (
         <div className="container py-8">
             {/* Header */}
@@ -211,11 +191,7 @@ export function TransactionsView({
                 showSource={true}
                 className="animate-slide-up"
                 emptyMessage="No transactions for this month. Upload a statement to get started."
-                // Only trigger refresh for non-optimistic actions (like exclusion)
-                // For tagging, we want to intercept.
                 onTransactionUpdate={() => router.refresh()}
-                
-                // We need to extend TransactionTable to accept this
                 onTagChangeOverride={handleTagChange}
             />
 

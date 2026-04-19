@@ -1,6 +1,7 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
+import { revalidatePath } from 'next/cache'
 import { createTag } from './tags'
 import { updateSettings } from './settings'
 
@@ -101,6 +102,12 @@ export async function completeOnboarding(input: OnboardingInput) {
             }
         }
     }
-    
+
+    // Onboarding flips needsOnboarding → false on /upload and seeds tags that
+    // the layout/nav reads via getSettings. Invalidate both layers so the
+    // wizard doesn't re-mount on next render.
+    revalidatePath('/', 'layout')
+    revalidatePath('/upload')
+
     return { success: true }
 }

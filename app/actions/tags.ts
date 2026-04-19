@@ -4,6 +4,16 @@ import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { Tag } from '@/lib/supabase/database.types'
 
+// Tag changes ripple into the transactions list, the insights aggregations,
+// the recent-imports / onboarding gate on /upload, and any statement detail
+// page that renders tagged transactions.
+function revalidateTagSurfaces() {
+    revalidatePath('/transactions')
+    revalidatePath('/insights')
+    revalidatePath('/upload')
+    revalidatePath('/statements/[id]', 'page')
+}
+
 export async function getTags() {
     const supabase = await createClient()
     const { data: tags, error } = await supabase
@@ -49,7 +59,7 @@ export async function createTag(input: CreateTagInput) {
         throw new Error(error.message)
     }
 
-    revalidatePath('/transactions')
+    revalidateTagSurfaces()
     return data as Tag
 }
 
@@ -73,7 +83,7 @@ export async function updateTag(id: string, input: Partial<CreateTagInput>) {
         throw new Error(error.message)
     }
 
-    revalidatePath('/transactions')
+    revalidateTagSurfaces()
     return data as Tag
 }
 
@@ -90,7 +100,7 @@ export async function deleteTag(id: string) {
         throw new Error(error.message)
     }
 
-    revalidatePath('/transactions')
+    revalidateTagSurfaces()
 }
 
 export async function assignTagsToTransaction(transactionId: string, tagIds: string[]) {
@@ -108,7 +118,7 @@ export async function assignTagsToTransaction(transactionId: string, tagIds: str
     }
 
     if (tagIds.length === 0) {
-        revalidatePath('/transactions')
+        revalidateTagSurfaces()
         return
     }
 
@@ -125,5 +135,5 @@ export async function assignTagsToTransaction(transactionId: string, tagIds: str
         throw new Error(insertError.message)
     }
 
-    revalidatePath('/transactions')
+    revalidateTagSurfaces()
 }

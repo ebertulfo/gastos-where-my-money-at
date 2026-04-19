@@ -4,13 +4,18 @@ import { getReviewData, confirmStatementImport, deleteStatement, saveDuplicateDe
 
 type DuplicateDecisions = Record<string, 'keep_existing' | 'add_new'>
 
+interface ConfirmResult {
+    success: boolean
+    targetMonth?: string
+}
+
 interface UseStatementReviewReturn {
     review: ImportReview | null
     isLoading: boolean
     error: string | null
     duplicateDecisions: DuplicateDecisions
     setDuplicateDecision: (importId: string, decision: 'keep_existing' | 'add_new') => void
-    confirm: () => Promise<boolean>
+    confirm: () => Promise<ConfirmResult>
     reject: () => Promise<boolean>
     isConfirming: boolean
     isRejecting: boolean
@@ -68,8 +73,8 @@ export function useStatementReview(statementId: string): UseStatementReviewRetur
         }
     }, [])
 
-    const confirm = useCallback(async (): Promise<boolean> => {
-        if (!review) return false
+    const confirm = useCallback(async (): Promise<ConfirmResult> => {
+        if (!review) return { success: false }
 
         setIsConfirming(true)
         setError(null)
@@ -95,11 +100,11 @@ export function useStatementReview(statementId: string): UseStatementReviewRetur
                 throw new Error(result.error || 'Failed to confirm import')
             }
 
-            return true
+            return { success: true, targetMonth: result.targetMonth }
         } catch (err) {
             console.error("Confirm error:", err)
             setError(err instanceof Error ? err.message : 'Failed to confirm import')
-            return false
+            return { success: false }
         } finally {
             setIsConfirming(false)
         }

@@ -1,12 +1,47 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
+import { revalidatePath } from 'next/cache'
 import { ImportReview, DuplicatePair, ImportDecisions, Transaction, Statement as UIStatement } from '@/lib/types/transaction'
 import { Database } from '@/lib/supabase/database.types'
 
 type DBTransaction = Database['public']['Tables']['transactions']['Row']
 type DBImport = Database['public']['Tables']['transaction_imports']['Row'] & { is_excluded?: boolean, exclusion_reason?: string | null }
 type DBStatement = Database['public']['Tables']['statements']['Row']
+
+type CountJoin = { count: number }[] | null | undefined
+
+function countOf(join: CountJoin): number {
+  return join?.[0]?.count ?? 0
+}
+
+function mapDBStatementToUI(s: DBStatement, transactionCount = 0): UIStatement {
+  let bankName = s.bank || 'Unknown Bank'
+  if ((bankName === 'Unknown Bank' || !s.bank) && s.source_file_name) {
+    bankName = s.source_file_name
+  }
+
+  return {
+    id: s.id,
+    bankName,
+    accountLabel: s.account_name || undefined,
+    periodStart: s.period_start,
+    periodEnd: s.period_end,
+    currency: s.currency || 'SGD',
+    transactionCount,
+    status: (s.status === 'ingesting' || s.status === 'parsed') ? 'reviewing' : (s.status as UIStatement['status']),
+    fileHash: s.source_file_sha256,
+    createdAt: s.created_at,
+  }
+}
+
+// Pages that read these surfaces — kept here so revalidations after every
+// mutation in this module hit the same set.
+const STATEMENT_REVALIDATE_PATHS = ['/statements', '/upload', '/transactions', '/insights'] as const
+
+function revalidateStatementSurfaces() {
+  for (const path of STATEMENT_REVALIDATE_PATHS) revalidatePath(path)
+}
 
 function mapDBTransaction(t: DBTransaction): Transaction {
   return {
@@ -87,27 +122,14 @@ export async function getReviewData(statementId: string): Promise<ImportReview> 
   }
   */
 
-  const uiStatement: UIStatement = {
-    id: statement.id,
-    bankName: (statement.bank && statement.bank !== 'Unknown') ? statement.bank : (statement.source_file_name || 'Unknown Bank'),
-    accountLabel: statement.account_name || undefined,
-    periodStart: statement.period_start,
-    periodEnd: statement.period_end,
-    currency: statement.currency || 'SGD',
-    transactionCount: imports.length, // Total found in this file
-    status: (statement.status === 'ingesting' || statement.status === 'parsed') ? 'reviewing' : (statement.status as any),
-    fileHash: statement.source_file_sha256,
-    createdAt: statement.created_at,
-  }
-
   return {
-    statement: uiStatement,
+    statement: mapDBStatementToUI(statement, imports.length),
     newTransactions: newImports.map(i => mapImportToTransaction(i, statement.currency || 'SGD')),
     duplicates,
   }
 }
 
-export async function confirmStatementImport(statementId: string, decisions: ImportDecisions['decisions']): Promise<{ success: boolean; error?: string }> {
+export async function confirmStatementImport(statementId: string, decisions: ImportDecisions['decisions']): Promise<{ success: boolean; error?: string; targetMonth?: string }> {
   const supabase = await createClient()
 
   // 1. Fetch all pending imports for this statement
@@ -130,11 +152,15 @@ export async function confirmStatementImport(statementId: string, decisions: Imp
   const transactionsToInsert: any[] = []
   const importsToUpdate: { id: string; resolution: 'accepted' | 'rejected' }[] = []
 
-  // Check getting user_id from the statement to assign to transactions
-  const { data: statementData } = await (supabase as any).from('statements').select('uploaded_by').eq('id', statementId).single()
+  // Need uploader for transactions, period_end for the post-confirm redirect.
+  const { data: statementData } = await (supabase as any)
+    .from('statements')
+    .select('uploaded_by, period_end')
+    .eq('id', statementId)
+    .single()
   if (!statementData) return { success: false, error: 'Statement not found' }
 
-  const statement = statementData as { uploaded_by: string }
+  const statement = statementData as { uploaded_by: string; period_end: string | null }
 
   for (const imp of imports) {
     const action = decisionMap.get(imp.id)
@@ -229,7 +255,21 @@ export async function confirmStatementImport(statementId: string, decisions: Imp
     .update({ status: 'ingested' })
     .eq('id', statementId)
 
-  return { success: true }
+  revalidateStatementSurfaces()
+  revalidatePath(`/statements/${statementId}`)
+
+  // Pick the month bucket the user should land on. Prefer accepted rows so the
+  // landing page is non-empty; fall back to statement period_end.
+  const acceptedMonths = imports
+    .filter(i => decisionMap.get(i.id) === 'accept' || !i.existing_transaction_id)
+    .map(i => i.month_bucket)
+    .filter((m): m is string => Boolean(m))
+    .sort()
+  const targetMonth =
+    acceptedMonths[acceptedMonths.length - 1] ||
+    (statement.period_end ? statement.period_end.slice(0, 7) : undefined)
+
+  return { success: true, targetMonth }
 }
 
 export async function getRecentStatements(): Promise<UIStatement[]> {
@@ -237,7 +277,7 @@ export async function getRecentStatements(): Promise<UIStatement[]> {
 
   const { data: statementsData, error } = await (supabase as any)
     .from('statements')
-    .select('*')
+    .select('*, transactions(count), transaction_imports(count)')
     .order('created_at', { ascending: false })
     .limit(10)
 
@@ -246,27 +286,14 @@ export async function getRecentStatements(): Promise<UIStatement[]> {
     return []
   }
 
-  const statements = statementsData as DBStatement[]
+  const statements = statementsData as (DBStatement & {
+    transactions: CountJoin
+    transaction_imports: CountJoin
+  })[]
 
-  return statements.map(s => {
-    let bankName = s.bank || 'Unknown Bank'
-    if ((bankName === 'Unknown Bank' || !s.bank) && s.source_file_name) {
-      bankName = s.source_file_name
-    }
-
-    return {
-      id: s.id,
-      bankName: bankName,
-      accountLabel: s.account_name || undefined,
-      periodStart: s.period_start,
-      periodEnd: s.period_end,
-      currency: s.currency || 'SGD',
-      transactionCount: 0, // TODO: Count transactions or store count on statement
-      status: (s.status === 'ingesting' || s.status === 'parsed') ? 'reviewing' : (s.status as any),
-      fileHash: s.source_file_sha256,
-      createdAt: s.created_at,
-    }
-  })
+  return statements.map(s =>
+    mapDBStatementToUI(s, countOf(s.transactions) || countOf(s.transaction_imports))
+  )
 }
 
 export async function deleteStatement(statementId: string): Promise<{ success: boolean; error?: string }> {
@@ -281,6 +308,8 @@ export async function deleteStatement(statementId: string): Promise<{ success: b
     return { success: false, error: error.message }
   }
 
+  revalidateStatementSurfaces()
+  revalidatePath(`/statements/${statementId}`)
   return { success: true }
 }
 
@@ -289,7 +318,7 @@ export async function getStatements(): Promise<UIStatement[]> {
 
   const { data: statementsData, error } = await (supabase as any)
     .from('statements')
-    .select('*, transactions(count)')
+    .select('*, transactions(count), transaction_imports(count)')
     .order('created_at', { ascending: false })
 
   if (error || !statementsData) {
@@ -297,36 +326,14 @@ export async function getStatements(): Promise<UIStatement[]> {
     return []
   }
 
-  const statements = statementsData as (DBStatement & { transactions: { count: number }[] })[]
+  const statements = statementsData as (DBStatement & {
+    transactions: CountJoin
+    transaction_imports: CountJoin
+  })[]
 
-  return statements.map(s => {
-    let bankName = s.bank || 'Unknown Bank'
-    if ((bankName === 'Unknown Bank' || !s.bank) && s.source_file_name) {
-      bankName = s.source_file_name
-    }
-
-    // Supabase returns count as an array of objects if simply selected? 
-    // Actually .select('*, transactions(count)') with head:true or similar usually works differently.
-    // But standard select returns array.
-    // Let's assume the count is in the first element if it's a join, but count is tricky with standard PostgREST.
-    // For now, let's just stick to the basic fetch and verify count later if needed, 
-    // OR just use the same logic as getRecentStatements but try to get count properly if possible.
-    // The Type Assertion above might be optimistic. 
-    // Let's revert to simple fetch to be safe and match getRecentStatements style for now.
-
-    return {
-      id: s.id,
-      bankName: bankName,
-      accountLabel: s.account_name || undefined,
-      periodStart: s.period_start,
-      periodEnd: s.period_end,
-      currency: s.currency || 'SGD',
-      transactionCount: s.transactions ? s.transactions[0]?.count : 0, // Placeholder-ish
-      status: (s.status === 'ingesting' || s.status === 'parsed') ? 'reviewing' : (s.status as any),
-      fileHash: s.source_file_sha256,
-      createdAt: s.created_at,
-    }
-  })
+  return statements.map(s =>
+    mapDBStatementToUI(s, countOf(s.transactions) || countOf(s.transaction_imports))
+  )
 }
 
 export async function getStatementById(id: string): Promise<UIStatement | null> {
@@ -334,7 +341,7 @@ export async function getStatementById(id: string): Promise<UIStatement | null> 
 
   const { data: statementData, error } = await (supabase as any)
     .from('statements')
-    .select('*, transactions(count)')
+    .select('*, transactions(count), transaction_imports(count)')
     .eq('id', id)
     .single()
 
@@ -342,33 +349,21 @@ export async function getStatementById(id: string): Promise<UIStatement | null> 
     return null
   }
 
-  const s = statementData as (DBStatement & { transactions: { count: number }[] })
+  const s = statementData as (DBStatement & {
+    transactions: CountJoin
+    transaction_imports: CountJoin
+  })
 
-  let bankName = s.bank || 'Unknown Bank'
-  if ((bankName === 'Unknown Bank' || !s.bank) && s.source_file_name) {
-    bankName = s.source_file_name
-  }
-
-  return {
-    id: s.id,
-    bankName: bankName,
-    accountLabel: s.account_name || undefined,
-    periodStart: s.period_start,
-    periodEnd: s.period_end,
-    currency: s.currency || 'SGD',
-    transactionCount: s.transactions ? s.transactions[0]?.count : 0,
-    status: (s.status === 'ingesting' || s.status === 'parsed') ? 'reviewing' : (s.status as any),
-    fileHash: s.source_file_sha256,
-    createdAt: s.created_at,
-  }
+  return mapDBStatementToUI(s, countOf(s.transactions) || countOf(s.transaction_imports))
 }
+
 export async function getPendingStatements(): Promise<UIStatement[]> {
   const supabase = await createClient()
 
   const { data: statementsData, error } = await (supabase as any)
     .from('statements')
-    .select('*')
-    .in('status', ['parsed', 'ingesting']) // Pending statuses
+    .select('*, transaction_imports(count)')
+    .in('status', ['parsed', 'ingesting'])
     .order('created_at', { ascending: true })
 
   if (error || !statementsData) {
@@ -376,28 +371,8 @@ export async function getPendingStatements(): Promise<UIStatement[]> {
     return []
   }
 
-  const statements = statementsData as DBStatement[]
-
-  // TODO: Refactor this mapping into a shared helper function as it's used in 3 places now
-  return statements.map((s: DBStatement) => {
-    let bankName = s.bank || 'Unknown Bank'
-    if ((bankName === 'Unknown Bank' || !s.bank) && s.source_file_name) {
-      bankName = s.source_file_name
-    }
-
-    return {
-      id: s.id,
-      bankName: bankName,
-      accountLabel: s.account_name || undefined,
-      periodStart: s.period_start,
-      periodEnd: s.period_end,
-      currency: s.currency || 'SGD',
-      transactionCount: 0,
-      status: (s.status === 'ingesting' || s.status === 'parsed') ? 'reviewing' : (s.status as any),
-      fileHash: s.source_file_sha256,
-      createdAt: s.created_at,
-    }
-  })
+  const statements = statementsData as (DBStatement & { transaction_imports: CountJoin })[]
+  return statements.map(s => mapDBStatementToUI(s, countOf(s.transaction_imports)))
 }
 
 export async function saveDuplicateDecision(importId: string, decision: 'accept' | 'reject'): Promise<void> {
@@ -406,15 +381,20 @@ export async function saveDuplicateDecision(importId: string, decision: 'accept'
   // We store the draft decision in the 'notes' column with a prefix
   const noteContent = `DRAFT:${decision}`
 
-  const { error } = await (supabase as any)
+  const { data, error } = await (supabase as any)
     .from('transaction_imports')
     .update({ notes: noteContent })
     .eq('id', importId)
+    .select('statement_id')
+    .single()
 
   if (error) {
     console.error(`Failed to save duplicate decision for ${importId}:`, error)
     throw new Error('Failed to save decision')
   }
-}
 
-// ... existing code ...
+  const statementId = (data as { statement_id?: string } | null)?.statement_id
+  if (statementId) {
+    revalidatePath(`/imports/${statementId}/review`)
+  }
+}

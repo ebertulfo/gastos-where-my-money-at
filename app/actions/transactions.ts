@@ -1,6 +1,7 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
+import { revalidatePath } from 'next/cache'
 import { Transaction, MonthSummary } from '@/lib/types/transaction'
 import { Database } from '@/lib/supabase/database.types'
 
@@ -149,6 +150,7 @@ export async function updateTransactionExclusion(id: string, isExcluded: boolean
     .select('id', { count: 'exact', head: true }) // Check if any row as updated
 
   if (!txError && count && count > 0) {
+    revalidateExclusionSurfaces()
     return { success: true }
   }
 
@@ -165,7 +167,18 @@ export async function updateTransactionExclusion(id: string, isExcluded: boolean
     throw new Error('Failed to update exclusion')
   }
 
+  revalidateExclusionSurfaces()
   return { success: true }
+}
+
+// Exclusion changes feed totals on /transactions and /insights, and the per-
+// statement transaction list on /statements/[id]. Review screens read directly
+// off transaction_imports so revalidate that dynamic route too.
+function revalidateExclusionSurfaces() {
+  revalidatePath('/transactions')
+  revalidatePath('/insights')
+  revalidatePath('/statements/[id]', 'page')
+  revalidatePath('/imports/[statementId]/review', 'page')
 }
 
 export async function getStatementsForMonth(month: string): Promise<{ id: string; label: string }[]> {

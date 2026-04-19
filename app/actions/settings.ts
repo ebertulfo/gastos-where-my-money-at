@@ -60,4 +60,6 @@ export async function updateSettings(input: { currency?: string }) {
     }
 
     revalidatePath('/upload')
+    revalidatePath('/insights')
+    revalidatePath('/transactions')
 }

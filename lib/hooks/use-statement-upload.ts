@@ -1,8 +1,28 @@
 'use client'
 
 import { useState, useCallback } from 'react'
-import { uploadStatement, parseStatementProgress, type ParsingStep } from '@/lib/services/statement-service'
 import { supabase } from '@/lib/supabase/client'
+
+async function uploadStatement(file: File, token?: string): Promise<{ statementId: string; isDuplicate?: boolean }> {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const headers: HeadersInit = {}
+    if (token) headers['Authorization'] = `Bearer ${token}`
+
+    const response = await fetch('/api/statements/ingest', {
+        method: 'POST',
+        headers,
+        body: formData,
+    })
+
+    if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.error || 'Failed to upload statement')
+    }
+
+    return response.json()
+}
 
 export interface UploadState {
     id: string
