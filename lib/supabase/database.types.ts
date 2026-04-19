@@ -352,7 +352,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      apply_import_suggestions: { Args: { payload: Json }; Returns: number }
     }
     Enums: {
       import_resolution: "pending" | "accepted" | "rejected"

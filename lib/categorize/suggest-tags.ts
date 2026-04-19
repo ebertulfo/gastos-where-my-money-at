@@ -15,12 +15,14 @@ import type {
   TagVocabularyEntry,
 } from './types'
 
-const BATCH_SIZE = 50
+// Smaller batches → faster individual responses (gpt-4o-mini's TTFT scales
+// with output length) AND we get progressive UI updates as each batch lands.
+const BATCH_SIZE = 25
 
-// Cap concurrent OpenAI calls across the whole process. Bulk uploads would
-// otherwise fan out one in-flight call per statement, hitting the per-org
-// rate limit.
-const limiter = pLimit(2)
+// Cap concurrent OpenAI calls across the whole process. Multiple statements
+// uploaded in parallel — and multiple batches within a statement — share
+// this budget, so we don't fan out into rate-limit territory.
+const limiter = pLimit(4)
 
 interface RawSuggestion {
   tempId: string
@@ -123,7 +125,10 @@ export interface SuggestForStatementResult {
  * be called from the ingest route's after() hook — never throws.
  */
 export async function suggestTagsForStatement(statementId: string): Promise<SuggestForStatementResult> {
-  return limiter(async () => {
+  // The per-statement work is mostly setup (DB reads, budget check) — the
+  // actual rate-limited bit is the OpenAI calls inside processBatch. So no
+  // outer limiter wrap; the inner one handles fan-out.
+  return (async () => {
     try {
       const supabase = createServerClient()
 
@@ -199,44 +204,15 @@ export async function suggestTagsForStatement(statementId: string): Promise<Sugg
       }
 
       const batches = chunk(rows, BATCH_SIZE)
-      const completedAt = new Date().toISOString()
-      let totalCents = 0
-      let modelVersion = ''
 
-      for (const batch of batches) {
-        try {
-          const { results, modelVersion: mv, usageCents } = await suggestBatch(batch, vocabulary)
-          totalCents += usageCents
-          modelVersion = mv
+      // Run batches concurrently (the global p-limit caps how many actually
+      // hit OpenAI at once). Each batch persists its own results via a
+      // single RPC call so the UI sees progressive updates as polling fires.
+      const batchOutcomes = await Promise.all(
+        batches.map(batch => limiter(() => processBatch(supabase, statementId, batch, vocabulary)))
+      )
 
-          // Persist suggestions for this batch.
-          await Promise.all(results.map(async (r) => {
-            await (supabase as any)
-              .from('transaction_imports')
-              .update({
-                suggested_tag_ids: r.suggestedTagIds,
-                ai_suggestion_status: 'completed',
-                ai_model_version: mv,
-                ai_suggested_at: completedAt,
-              })
-              .eq('id', r.tempId)
-          }))
-        } catch (err) {
-          console.warn(`AI tagging batch failed for statement ${statementId}`)
-          // Mark only this batch's rows as failed; subsequent batches keep trying.
-          await Promise.all(batch.map(async (r) => {
-            await (supabase as any)
-              .from('transaction_imports')
-              .update({
-                ai_suggestion_status: 'failed',
-                ai_model_version: modelVersion || null,
-                ai_suggested_at: completedAt,
-              })
-              .eq('id', r.tempId)
-          }))
-        }
-      }
-
+      const totalCents = batchOutcomes.reduce((sum, o) => sum + o.usageCents, 0)
       if (totalCents > 0) {
         await incrementSpend(userId, totalCents)
       }
@@ -246,7 +222,50 @@ export async function suggestTagsForStatement(statementId: string): Promise<Sugg
       console.warn('suggestTagsForStatement crashed')
       return { status: 'failed', reason: 'unexpected_error' }
     }
-  })
+  })()
+}
+
+interface BatchOutcome {
+  usageCents: number
+  failed: boolean
+}
+
+async function processBatch(
+  supabase: ReturnType<typeof createServerClient>,
+  statementId: string,
+  batch: SuggestionInputRow[],
+  vocabulary: TagVocabularyEntry[]
+): Promise<BatchOutcome> {
+  const completedAt = new Date().toISOString()
+  try {
+    const { results, modelVersion, usageCents } = await suggestBatch(batch, vocabulary)
+
+    const payload = results.map(r => ({
+      id: r.tempId,
+      suggested_tag_ids: r.suggestedTagIds,
+      ai_suggestion_status: 'completed' as const,
+      ai_model_version: modelVersion,
+      ai_suggested_at: completedAt,
+    }))
+
+    const { error: rpcError } = await (supabase as any).rpc('apply_import_suggestions', { payload })
+    if (rpcError) {
+      console.warn(`apply_import_suggestions RPC failed for statement ${statementId}`)
+    }
+
+    return { usageCents, failed: false }
+  } catch {
+    console.warn(`AI tagging batch failed for statement ${statementId}`)
+    const failPayload = batch.map(r => ({
+      id: r.tempId,
+      suggested_tag_ids: [] as string[],
+      ai_suggestion_status: 'failed' as const,
+      ai_model_version: null,
+      ai_suggested_at: completedAt,
+    }))
+    await (supabase as any).rpc('apply_import_suggestions', { payload: failPayload })
+    return { usageCents: 0, failed: true }
+  }
 }
 
 async function markStatementImportsStatus(statementId: string, status: SuggestionStatus) {
