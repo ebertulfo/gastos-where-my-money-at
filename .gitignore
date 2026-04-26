@@ -47,3 +47,6 @@ node_modules/
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
+
+# private test fixtures (real bank statements — never commit)
+/tests/private/
