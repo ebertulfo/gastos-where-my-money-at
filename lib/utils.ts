@@ -20,6 +20,42 @@ export function formatDate(date: string | Date) {
   }).format(new Date(date))
 }
 
+// Bank slug ⇄ display name. Slugs are produced by detectBankSlug in
+// lib/db/ingest.ts; the inverse lives here so display logic across pages
+// stays consistent. Anything not in the map falls back to upper-casing
+// the slug so future banks render reasonably without a code change.
+const BANK_DISPLAY_NAMES: Record<string, string> = {
+  dbs_posb: 'DBS/POSB',
+  stanchart: 'Standard Chartered',
+  maybank: 'Maybank',
+  citi: 'Citibank',
+  hsbc: 'HSBC',
+  posb: 'POSB',
+  ocbc: 'OCBC',
+  uob: 'UOB',
+  dbs: 'DBS',
+}
+
+export function humanizeBankSlug(slug: string | null | undefined): string {
+  if (!slug) return 'Unknown bank'
+  const trimmed = slug.trim().toLowerCase()
+  if (!trimmed || trimmed === 'unknown') return 'Unknown bank'
+  return BANK_DISPLAY_NAMES[trimmed] ?? trimmed.toUpperCase()
+}
+
+const STATEMENT_TYPE_LABELS: Record<'debit' | 'credit' | 'investment', string> = {
+  debit: 'Bank',
+  credit: 'Credit card',
+  investment: 'Investment',
+}
+
+export function humanizeStatementType(
+  type: 'debit' | 'credit' | 'investment' | null | undefined,
+): string {
+  if (!type) return 'Statement'
+  return STATEMENT_TYPE_LABELS[type] ?? 'Statement'
+}
+
 
 export const getURL = () => {
   let url =

@@ -6,16 +6,16 @@ import { Transaction, MonthSummary } from '@/lib/types/transaction'
 import { Database } from '@/lib/supabase/database.types'
 import type { Insights, InsightsPeriod, MerchantRow, TagBreakdownRow } from '@/lib/types/insights'
 
-import { formatDate } from '@/lib/utils'
+import { formatDate, humanizeBankSlug } from '@/lib/utils'
 
 function mapDBTransaction(t: any): Transaction {
-  const bankName = t.statements?.bank || 'Unknown'
+  const bankName = humanizeBankSlug(t.statements?.bank)
   const period = t.statements?.period_start ? `(${formatDate(t.statements.period_start).split(' ')[1]} ${formatDate(t.statements.period_start).split(' ')[2]})` : ''
 
-  let sourceLabel = `${bankName} ${period}`
-  if (bankName === 'Unknown' && t.statements?.source_file_name) {
-    sourceLabel = t.statements.source_file_name
-  }
+  // Skip the redacted source_file_name fallback (it's deliberately opaque
+  // post-Slice 1). When statement metadata is missing entirely, mark as
+  // "Usage" so the row still has a label.
+  let sourceLabel = `${bankName} ${period}`.trim()
   if (!t.statements) {
     sourceLabel = 'Usage'
   }
@@ -202,14 +202,9 @@ export async function getStatementsForMonth(month: string): Promise<{ id: string
 
   data.forEach((t: any) => {
     if (t.statements) {
-      const bank = t.statements.bank || 'Unknown'
+      const bank = humanizeBankSlug(t.statements.bank)
       const period = t.statements.period_start ? `(${formatDate(t.statements.period_start).split(' ')[1]} ${formatDate(t.statements.period_start).split(' ')[2]})` : ''
-
-      let label = `${bank} ${period}`
-      if (bank === 'Unknown' && t.statements.source_file_name) {
-        label = t.statements.source_file_name
-      }
-
+      const label = `${bank} ${period}`.trim()
       uniqueStatements.set(t.statements.id, label)
     }
   })
@@ -287,13 +282,12 @@ export async function getInsights(period: InsightsPeriod): Promise<Insights> {
   if (period.type === 'statement') {
     const { data: stmt } = await (supabase as any)
       .from('statements')
-      .select('id, bank, source_file_name, period_start')
+      .select('id, bank, period_start')
       .eq('id', period.statementId)
       .maybeSingle()
     if (stmt) {
-      const s = stmt as { id: string; bank: string | null; source_file_name: string; period_start: string }
-      const bank = s.bank || s.source_file_name || 'Statement'
-      statementLabelById.set(s.id, `${bank} (${s.period_start.slice(0, 7)})`)
+      const s = stmt as { id: string; bank: string | null; period_start: string }
+      statementLabelById.set(s.id, `${humanizeBankSlug(s.bank)} (${s.period_start.slice(0, 7)})`)
     }
   }
 

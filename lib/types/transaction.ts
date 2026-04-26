@@ -18,6 +18,7 @@ export interface Statement {
     id: string
     bankName: string
     accountLabel?: string
+    statementType: 'debit' | 'credit' | 'investment'
     periodStart: string
     periodEnd: string
     currency: string

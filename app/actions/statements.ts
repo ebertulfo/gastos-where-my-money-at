@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache'
 import { ImportReview, DuplicatePair, ImportDecisions, Transaction, Statement as UIStatement } from '@/lib/types/transaction'
 import { Database } from '@/lib/supabase/database.types'
 import { embedTransactions } from '@/lib/suggest/embed'
+import { humanizeBankSlug } from '@/lib/utils'
 
 type DBTransaction = Database['public']['Tables']['transactions']['Row']
 type DBImport = Database['public']['Tables']['transaction_imports']['Row'] & { is_excluded?: boolean, exclusion_reason?: string | null }
@@ -17,14 +18,14 @@ function countOf(join: CountJoin): number {
 }
 
 function mapDBStatementToUI(s: DBStatement, transactionCount = 0): UIStatement {
-  let bankName = s.bank || 'Unknown Bank'
-  if ((bankName === 'Unknown Bank' || !s.bank) && s.source_file_name) {
-    bankName = s.source_file_name
-  }
-
+  // Never fall back to source_file_name — it's the redacted form
+  // (`{hash8}-{type}-{bank}-{MM-YYYY}.pdf`) and is intentionally opaque.
+  // Display layer humanizes the bank slug; "Unknown bank" is the honest
+  // fallback when detection failed.
   return {
     id: s.id,
-    bankName,
+    bankName: humanizeBankSlug(s.bank),
+    statementType: s.statement_type as UIStatement['statementType'],
     periodStart: s.period_start,
     periodEnd: s.period_end,
     currency: s.currency || 'SGD',
