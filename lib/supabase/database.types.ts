@@ -41,6 +41,7 @@ export type Database = {
           created_at: string
           currency: string
           id: string
+          member_id: string | null
           period_end: string
           period_start: string
           source_file_name: string
@@ -58,6 +59,7 @@ export type Database = {
           created_at?: string
           currency?: string
           id?: string
+          member_id?: string | null
           period_end: string
           period_start: string
           source_file_name: string
@@ -75,6 +77,7 @@ export type Database = {
           created_at?: string
           currency?: string
           id?: string
+          member_id?: string | null
           period_end?: string
           period_start?: string
           source_file_name?: string
@@ -85,6 +88,41 @@ export type Database = {
           updated_at?: string
           uploaded_at?: string
           uploaded_by?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "statements_member_id_fkey"
+            columns: ["member_id"]
+            isOneToOne: false
+            referencedRelation: "household_members"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      household_members: {
+        Row: {
+          id: string
+          user_id: string
+          name: string
+          color: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          name: string
+          color?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          name?: string
+          color?: string | null
+          created_at?: string
+          updated_at?: string
         }
         Relationships: []
       }
@@ -534,6 +572,10 @@ export type StatementType = Database['public']['Enums']['statement_type']
 export type StatementStatus = Database['public']['Enums']['statement_status']
 export type ImportResolution = Database['public']['Enums']['import_resolution']
 export type TransactionStatus = Database['public']['Enums']['transaction_status']
+
+export type HouseholdMember = Database['public']['Tables']['household_members']['Row']
+export type HouseholdMemberInsert = Database['public']['Tables']['household_members']['Insert']
+export type HouseholdMemberUpdate = Database['public']['Tables']['household_members']['Update']
 
 export type Tag = Database['public']['Tables']['tags']['Row']
 export type TagInsert = Database['public']['Tables']['tags']['Insert']

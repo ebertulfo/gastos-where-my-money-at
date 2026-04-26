@@ -1,3 +1,4 @@
+import { getHouseholdMembers } from '@/app/actions/household-members'
 import { getSettings } from '@/app/actions/settings'
 import { getRecentStatements } from '@/app/actions/statements'
 import { NavHeader } from '@/components/nav-header'
@@ -6,9 +7,10 @@ import { UploadView } from '@/components/upload-view'
 export const dynamic = 'force-dynamic'
 
 export default async function UploadPage() {
-  const [recentImports, settings] = await Promise.all([
+  const [recentImports, settings, householdMembers] = await Promise.all([
     getRecentStatements(),
     getSettings(),
+    getHouseholdMembers(),
   ])
 
   return (
@@ -17,6 +19,7 @@ export default async function UploadPage() {
       <UploadView
         initialRecentImports={recentImports}
         needsOnboarding={!settings}
+        initialMembers={householdMembers}
       />
     </div>
   )

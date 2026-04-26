@@ -81,6 +81,13 @@ export async function POST(request: Request) {
       );
     }
 
+    // Optional household member attribution. RLS already ensures the user
+    // can only reference their own household_members rows on insert.
+    const memberFromForm = formData.get('member_id');
+    const memberId = typeof memberFromForm === 'string' && memberFromForm.length > 0
+      ? memberFromForm
+      : null;
+
     // Validate file type
     if (!ALLOWED_MIME_TYPES.includes(file.type)) {
       return NextResponse.json(
@@ -178,6 +185,7 @@ export async function POST(request: Request) {
         periodEnd,
         // bank inferred from filename inside ingestStatement when undefined.
         bank: undefined,
+        memberId,
       },
       userId: user.id,
     });

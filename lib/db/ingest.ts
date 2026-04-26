@@ -23,6 +23,13 @@ interface IngestOptions {
     periodEnd?: string;
     bank?: string;
     currency?: string;
+    /**
+     * Optional household_members.id selected by the uploader. The DB
+     * has ON DELETE SET NULL, so a stale id (e.g. user deleted member
+     * mid-flight) just clears the attribution — we don't fail ingest.
+     * RLS prevents cross-user references.
+     */
+    memberId?: string | null;
   };
   userId: string;
 }
@@ -132,6 +139,7 @@ export async function ingestStatement({
     currency: metadata.currency || 'SGD',
     status: 'ingesting',
     statement_type: statementType,
+    member_id: metadata.memberId ?? null,
   };
 
   const { data, error: statementError } = await (supabase as any)

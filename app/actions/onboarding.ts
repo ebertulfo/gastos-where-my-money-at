@@ -3,7 +3,16 @@
 import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { createTag } from './tags'
+import { ensureHouseholdMember } from './household-members'
 import { updateSettings } from './settings'
+
+// Sensible starter members. The user can rename/delete/add more later via
+// the upload selector or a future Settings page. "Joint" stays as a member
+// so it shows up alongside the rest in the same dropdown.
+const DEFAULT_MEMBERS: ReadonlyArray<{ name: string; color: string }> = [
+    { name: 'Me', color: '#10b981' },
+    { name: 'Joint', color: '#6366f1' },
+]
 
 const DEFAULT_TAGS = [
     {
@@ -88,7 +97,14 @@ export async function completeOnboarding(input: OnboardingInput) {
     // 1. Save Settings
     await updateSettings({ currency: input.currency, country: input.country })
 
-    // 2. Create Tags (if requested)
+    // 2. Seed default household members (idempotent — re-running onboarding
+    // won't duplicate). User can rename/delete from upload page Add-member
+    // flow or future settings page.
+    for (const m of DEFAULT_MEMBERS) {
+        await ensureHouseholdMember({ name: m.name, color: m.color })
+    }
+
+    // 3. Create Tags (if requested)
     if (input.useDefaultTags) {
         // We do this sequentially to ensure parents exist before children
         for (const category of DEFAULT_TAGS) {
@@ -104,9 +120,10 @@ export async function completeOnboarding(input: OnboardingInput) {
         }
     }
 
-    // Onboarding flips needsOnboarding → false on /upload and seeds tags that
-    // the layout/nav reads via getSettings. Invalidate both layers so the
-    // wizard doesn't re-mount on next render.
+    // Onboarding flips needsOnboarding → false on /upload and seeds tags +
+    // members that the upload page reads. Invalidate both layers so the
+    // wizard doesn't re-mount on next render and the new members appear in
+    // the upload selector.
     revalidatePath('/', 'layout')
     revalidatePath('/upload')
 
