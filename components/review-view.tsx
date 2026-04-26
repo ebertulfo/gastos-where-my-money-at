@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import type { Tag } from '@/lib/supabase/database.types'
 import type { ImportReview, Statement as UIStatement, StatementReconciliation } from '@/lib/types/transaction'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { AlertTriangle, Check, CheckCircle2, Info, Loader2 } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
@@ -118,7 +118,7 @@ export function ReviewView({ statementId, review, availableTags, pendingStatemen
 
       <Card className="mb-8 animate-fade-in">
         <CardContent className="p-6">
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             <div>
               <p className="text-sm text-muted-foreground">Bank / Account</p>
               <p className="font-medium">
@@ -140,6 +140,35 @@ export function ReviewView({ statementId, review, availableTags, pendingStatemen
               <p className="text-sm text-muted-foreground">Found</p>
               <p className="font-medium">{statement.transactionCount} transactions</p>
             </div>
+            <div>
+              <p className="text-sm text-muted-foreground">
+                {reconciliationLabel(reconciliation)}
+              </p>
+              <p className="font-medium">
+                {reconciliation.expectedTotal !== null
+                  ? formatCurrency(reconciliation.expectedTotal, reconciliation.currency)
+                  : '—'}
+              </p>
+            </div>
+            <div>
+              <p className="text-sm text-muted-foreground">Extracted total</p>
+              <p
+                className={cn(
+                  'font-medium',
+                  reconciliation.status === 'mismatch' && 'text-warning',
+                )}
+              >
+                {reconciliation.extractedTotal !== null
+                  ? formatCurrency(reconciliation.extractedTotal, reconciliation.currency)
+                  : '—'}
+                {reconciliation.status === 'mismatch' && reconciliation.diff !== null ? (
+                  <span className="ml-2 text-xs">
+                    ({reconciliation.diff > 0 ? '+' : ''}
+                    {formatCurrency(reconciliation.diff, reconciliation.currency)})
+                  </span>
+                ) : null}
+              </p>
+            </div>
           </div>
           <Separator className="my-4" />
           <div className="flex items-center gap-2">
@@ -147,6 +176,7 @@ export function ReviewView({ statementId, review, availableTags, pendingStatemen
               <Check className="h-3 w-3 mr-1" />
               New: {newTransactions.length}
             </Badge>
+            <ReconciliationBadge reconciliation={reconciliation} />
           </div>
         </CardContent>
       </Card>
@@ -213,40 +243,18 @@ export function ReviewView({ statementId, review, availableTags, pendingStatemen
   )
 }
 
+// Reserved for the only case where a full banner pulls its weight: the
+// extracted sum disagrees with the statement total. Match and unavailable
+// states are conveyed inline in the summary card via ReconciliationBadge,
+// since a full alert for "everything's fine" is mostly visual noise.
 function ReconciliationBanner({ reconciliation }: { reconciliation: StatementReconciliation }) {
-  if (reconciliation.status === 'unavailable') {
-    return (
-      <Alert className="mb-6 border-muted-foreground/30 bg-muted/40 animate-fade-in">
-        <Info className="h-4 w-4 text-muted-foreground" />
-        <AlertTitle className="text-sm">Couldn't read a verifiable total from this statement</AlertTitle>
-        <AlertDescription className="text-xs text-muted-foreground">
-          The reconciliation check is skipped — please eyeball the rows below to confirm nothing's missing.
-        </AlertDescription>
-      </Alert>
-    )
-  }
+  if (reconciliation.status !== 'mismatch') return null
 
   const expected = reconciliation.expectedTotal ?? 0
   const extracted = reconciliation.extractedTotal ?? 0
   const diff = reconciliation.diff ?? 0
   const currency = reconciliation.currency
-  const kindLabel =
-    reconciliation.expectedTotalKind === 'cc_new_charges_signed'
-      ? 'New charges this cycle'
-      : 'Total withdrawals'
-
-  if (reconciliation.status === 'match') {
-    return (
-      <Alert className="mb-6 border-success/40 bg-success/5 animate-fade-in">
-        <CheckCircle2 className="h-4 w-4 text-success" />
-        <AlertTitle className="text-sm">Extracted total matches the statement</AlertTitle>
-        <AlertDescription className="text-xs text-muted-foreground">
-          {kindLabel}: {formatCurrency(expected, currency)} · Extracted{' '}
-          {formatCurrency(extracted, currency)} from the parsed rows below.
-        </AlertDescription>
-      </Alert>
-    )
-  }
+  const kindLabel = reconciliationLabel(reconciliation)
 
   return (
     <Alert className="mb-6 border-warning/50 bg-warning/5 animate-fade-in">
@@ -262,4 +270,35 @@ function ReconciliationBanner({ reconciliation }: { reconciliation: StatementRec
       </AlertDescription>
     </Alert>
   )
+}
+
+function ReconciliationBadge({ reconciliation }: { reconciliation: StatementReconciliation }) {
+  if (reconciliation.status === 'match') {
+    return (
+      <Badge variant="outline" className="border-success/50 text-success">
+        <CheckCircle2 className="h-3 w-3 mr-1" />
+        Reconciled
+      </Badge>
+    )
+  }
+  if (reconciliation.status === 'mismatch') {
+    return (
+      <Badge variant="outline" className="border-warning/60 text-warning">
+        <AlertTriangle className="h-3 w-3 mr-1" />
+        Mismatch
+      </Badge>
+    )
+  }
+  return (
+    <Badge variant="outline" className="border-muted-foreground/40 text-muted-foreground">
+      <Info className="h-3 w-3 mr-1" />
+      Total not detected
+    </Badge>
+  )
+}
+
+function reconciliationLabel(reconciliation: StatementReconciliation): string {
+  if (reconciliation.expectedTotalKind === 'cc_new_charges_signed') return 'New charges this cycle'
+  if (reconciliation.expectedTotalKind === 'bank_withdrawals_abs') return 'Total withdrawals'
+  return 'Statement total'
 }
