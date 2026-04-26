@@ -41,7 +41,6 @@ export type Database = {
           created_at: string
           currency: string
           id: string
-          member_id: string | null
           period_end: string
           period_start: string
           source_file_name: string
@@ -59,7 +58,6 @@ export type Database = {
           created_at?: string
           currency?: string
           id?: string
-          member_id?: string | null
           period_end: string
           period_start: string
           source_file_name: string
@@ -77,7 +75,6 @@ export type Database = {
           created_at?: string
           currency?: string
           id?: string
-          member_id?: string | null
           period_end?: string
           period_start?: string
           source_file_name?: string
@@ -89,15 +86,7 @@ export type Database = {
           uploaded_at?: string
           uploaded_by?: string
         }
-        Relationships: [
-          {
-            foreignKeyName: "statements_member_id_fkey"
-            columns: ["member_id"]
-            isOneToOne: false
-            referencedRelation: "household_members"
-            referencedColumns: ["id"]
-          },
-        ]
+        Relationships: []
       }
       household_members: {
         Row: {
@@ -125,6 +114,39 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
+      }
+      statement_members: {
+        Row: {
+          statement_id: string
+          member_id: string
+          created_at: string
+        }
+        Insert: {
+          statement_id: string
+          member_id: string
+          created_at?: string
+        }
+        Update: {
+          statement_id?: string
+          member_id?: string
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "statement_members_statement_id_fkey"
+            columns: ["statement_id"]
+            isOneToOne: false
+            referencedRelation: "statements"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "statement_members_member_id_fkey"
+            columns: ["member_id"]
+            isOneToOne: false
+            referencedRelation: "household_members"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       tags: {
         Row: {

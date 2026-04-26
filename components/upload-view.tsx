@@ -4,6 +4,7 @@ import { createHouseholdMember } from '@/app/actions/household-members'
 import { OnboardingWizard } from '@/components/onboarding-wizard'
 import { StatementCard } from '@/components/statement-card'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -16,28 +17,19 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectSeparator,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { UploadDropzone } from '@/components/upload-dropzone'
 import { UploadProgressList } from '@/components/upload-progress-list'
 import { useStatementUpload } from '@/lib/hooks/use-statement-upload'
 import type { HouseholdMember } from '@/lib/supabase/database.types'
 import type { Statement } from '@/lib/types/transaction'
-import { Loader2, Plus, Sparkles, X } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { Check, Loader2, Plus, Sparkles, X } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useState } from 'react'
 
 const AI_DISCLOSURE_KEY = 'gastos.ai-disclosure-dismissed'
-const LAST_MEMBER_KEY = 'gastos.last-member-id'
-const ADD_MEMBER_VALUE = '__add__'
-const UNSPECIFIED_VALUE = '__unspecified__'
+const LAST_MEMBER_IDS_KEY = 'gastos.last-member-ids'
 
 interface UploadViewProps {
   initialRecentImports: Statement[]
@@ -55,7 +47,7 @@ export function UploadView({
   const [showOnboarding, setShowOnboarding] = useState(needsOnboarding)
   const [showAIDisclosure, setShowAIDisclosure] = useState(false)
   const [members, setMembers] = useState<HouseholdMember[]>(initialMembers)
-  const [selectedMemberId, setSelectedMemberId] = useState<string>(UNSPECIFIED_VALUE)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
   // Add-member dialog state
   const [addOpen, setAddOpen] = useState(false)
@@ -67,25 +59,39 @@ export function UploadView({
     if (typeof window === 'undefined') return
     setShowAIDisclosure(window.localStorage.getItem(AI_DISCLOSURE_KEY) !== '1')
 
-    // Restore last-used member only if it still exists in the household.
-    const last = window.localStorage.getItem(LAST_MEMBER_KEY)
-    if (last && initialMembers.some((m) => m.id === last)) {
-      setSelectedMemberId(last)
-    } else if (initialMembers.length > 0) {
-      // Default to the first member so the user doesn't have to think.
-      setSelectedMemberId(initialMembers[0].id)
+    // Restore last-used selection — only ids that still exist in the household.
+    const raw = window.localStorage.getItem(LAST_MEMBER_IDS_KEY)
+    if (raw) {
+      try {
+        const ids = JSON.parse(raw) as string[]
+        const validIds = new Set(ids.filter((id) => initialMembers.some((m) => m.id === id)))
+        setSelectedIds(validIds)
+      } catch {
+        // ignore malformed payload
+      }
     }
   }, [initialMembers])
 
-  const handleMemberChange = (value: string) => {
-    if (value === ADD_MEMBER_VALUE) {
-      setAddOpen(true)
-      return
-    }
-    setSelectedMemberId(value)
+  const persistSelection = (next: Set<string>) => {
     if (typeof window !== 'undefined') {
-      window.localStorage.setItem(LAST_MEMBER_KEY, value)
+      window.localStorage.setItem(LAST_MEMBER_IDS_KEY, JSON.stringify(Array.from(next)))
     }
+  }
+
+  const toggleMember = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      persistSelection(next)
+      return next
+    })
+  }
+
+  const clearMembers = () => {
+    const empty = new Set<string>()
+    setSelectedIds(empty)
+    persistSelection(empty)
   }
 
   const handleAddMember = async () => {
@@ -99,10 +105,13 @@ export function UploadView({
     try {
       const created = await createHouseholdMember({ name })
       setMembers((prev) => [...prev, created])
-      setSelectedMemberId(created.id)
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(LAST_MEMBER_KEY, created.id)
-      }
+      // Auto-select the newly added member.
+      setSelectedIds((prev) => {
+        const next = new Set(prev)
+        next.add(created.id)
+        persistSelection(next)
+        return next
+      })
       setNewMemberName('')
       setAddOpen(false)
     } catch (err) {
@@ -122,14 +131,13 @@ export function UploadView({
   const handleFileSelect = useCallback(
     async (files: File[]) => {
       if (files.length === 0) return
-      const memberIdForUpload =
-        selectedMemberId === UNSPECIFIED_VALUE ? null : selectedMemberId
-      await upload(files, memberIdForUpload)
+      await upload(files, Array.from(selectedIds))
     },
-    [upload, selectedMemberId],
+    [upload, selectedIds],
   )
 
   const showParsingProgress = isUploading || uploads.length > 0
+  const selectedCount = selectedIds.size
 
   return (
     <>
@@ -217,31 +225,59 @@ export function UploadView({
         <div className="max-w-2xl mx-auto mb-12">
           {!showParsingProgress && (
             <div className="mb-4 space-y-2 animate-slide-up">
-              <Label htmlFor="member-select" className="text-sm font-medium">
-                Whose statements are these?
-              </Label>
-              <Select value={selectedMemberId} onValueChange={handleMemberChange}>
-                <SelectTrigger id="member-select" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {members.map((m) => (
-                    <SelectItem key={m.id} value={m.id}>
-                      {m.name}
-                    </SelectItem>
-                  ))}
-                  <SelectItem value={UNSPECIFIED_VALUE}>Don't tag yet</SelectItem>
-                  <SelectSeparator />
-                  <SelectItem value={ADD_MEMBER_VALUE}>
-                    <span className="flex items-center gap-2">
-                      <Plus className="h-3.5 w-3.5" />
-                      Add member…
-                    </span>
-                  </SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="flex items-baseline justify-between">
+                <Label className="text-sm font-medium">Whose statements are these?</Label>
+                {selectedCount > 0 ? (
+                  <button
+                    type="button"
+                    onClick={clearMembers}
+                    className="text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    Clear
+                  </button>
+                ) : null}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {members.map((m) => {
+                  const selected = selectedIds.has(m.id)
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => toggleMember(m.id)}
+                      className={cn(
+                        'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors',
+                        selected
+                          ? 'border-primary bg-primary/10 text-foreground'
+                          : 'border-border bg-background text-muted-foreground hover:bg-muted',
+                      )}
+                      aria-pressed={selected}
+                    >
+                      {selected ? <Check className="h-3.5 w-3.5 text-primary" /> : null}
+                      <span>{m.name}</span>
+                    </button>
+                  )
+                })}
+                <button
+                  type="button"
+                  onClick={() => setAddOpen(true)}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-border bg-background px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>Add member</span>
+                </button>
+              </div>
               <p className="text-xs text-muted-foreground">
-                Applied to every file you drop next. You can change this any time.
+                {selectedCount === 0
+                  ? 'Pick one or more — leave empty to skip attribution.'
+                  : selectedCount === 1
+                    ? 'Tagged to 1 member. Pick another for joint / shared statements.'
+                    : `Tagged to ${selectedCount} members. Applied to every file you drop next.`}
+                {selectedCount > 0 ? (
+                  <Badge variant="outline" className="ml-2">
+                    {selectedCount} selected
+                  </Badge>
+                ) : null}
               </p>
             </div>
           )}

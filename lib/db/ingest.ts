@@ -24,12 +24,12 @@ interface IngestOptions {
     bank?: string;
     currency?: string;
     /**
-     * Optional household_members.id selected by the uploader. The DB
-     * has ON DELETE SET NULL, so a stale id (e.g. user deleted member
-     * mid-flight) just clears the attribution — we don't fail ingest.
-     * RLS prevents cross-user references.
+     * Optional household_members.id list selected by the uploader. A
+     * statement can belong to more than one member (joint cards,
+     * supplementary cards). Empty/undefined = unspecified attribution.
+     * RLS on statement_members ensures cross-user references fail.
      */
-    memberId?: string | null;
+    memberIds?: string[];
   };
   userId: string;
 }
@@ -139,7 +139,6 @@ export async function ingestStatement({
     currency: metadata.currency || 'SGD',
     status: 'ingesting',
     statement_type: statementType,
-    member_id: metadata.memberId ?? null,
   };
 
   const { data, error: statementError } = await (supabase as any)
@@ -147,13 +146,30 @@ export async function ingestStatement({
     .insert(statementData)
     .select()
     .single();
-    
+
   console.log('Created statement', data);
   // Explicitly cast or check to satisfy TS if inference fails
   const statement = data as any;
 
   if (statementError || !statement) {
     throw new Error(`Failed to create statement: ${statementError?.message}`);
+  }
+
+  // 4a. Attach members via the junction. Dedupe just in case; RLS
+  // enforces ownership on insert. Empty array = unspecified attribution.
+  const uniqueMemberIds = Array.from(new Set((metadata.memberIds ?? []).filter(Boolean)));
+  if (uniqueMemberIds.length > 0) {
+    const memberRows = uniqueMemberIds.map((mid) => ({
+      statement_id: statement.id as string,
+      member_id: mid,
+    }));
+    const { error: memberError } = await (supabase as any)
+      .from('statement_members')
+      .insert(memberRows);
+    if (memberError) {
+      // Don't fail ingest over attribution — statement is still useful.
+      console.warn('Failed to attach members to statement', memberError);
+    }
   }
 
   // 4. Prepare Transaction Imports

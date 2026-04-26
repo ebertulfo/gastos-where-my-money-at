@@ -81,12 +81,13 @@ export async function POST(request: Request) {
       );
     }
 
-    // Optional household member attribution. RLS already ensures the user
-    // can only reference their own household_members rows on insert.
-    const memberFromForm = formData.get('member_id');
-    const memberId = typeof memberFromForm === 'string' && memberFromForm.length > 0
-      ? memberFromForm
-      : null;
+    // Optional household member attribution. Multi-valued: a statement can
+    // legitimately belong to several members (joint cards, supplementary
+    // cards). Accepts repeated `member_ids` form-data fields. RLS on
+    // statement_members ensures cross-user inserts fail.
+    const memberIds = formData
+      .getAll('member_ids')
+      .filter((v): v is string => typeof v === 'string' && v.length > 0);
 
     // Validate file type
     if (!ALLOWED_MIME_TYPES.includes(file.type)) {
@@ -185,7 +186,7 @@ export async function POST(request: Request) {
         periodEnd,
         // bank inferred from filename inside ingestStatement when undefined.
         bank: undefined,
-        memberId,
+        memberIds,
       },
       userId: user.id,
     });

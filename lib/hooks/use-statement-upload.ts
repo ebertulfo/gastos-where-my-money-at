@@ -5,12 +5,14 @@ import { supabase } from '@/lib/supabase/client'
 
 async function uploadStatement(
     file: File,
-    memberId: string | null,
+    memberIds: string[],
     token?: string,
 ): Promise<{ statementId: string; isDuplicate?: boolean }> {
     const formData = new FormData()
     formData.append('file', file)
-    if (memberId) formData.append('member_id', memberId)
+    for (const id of memberIds) {
+        formData.append('member_ids', id)
+    }
 
     const headers: HeadersInit = {}
     if (token) headers['Authorization'] = `Bearer ${token}`
@@ -39,7 +41,7 @@ export interface UploadState {
 }
 
 interface UseStatementUploadReturn {
-    upload: (files: File[], memberId?: string | null) => Promise<void>
+    upload: (files: File[], memberIds?: string[]) => Promise<void>
     uploads: UploadState[]
     isUploading: boolean
     reset: () => void
@@ -54,7 +56,7 @@ export function useStatementUpload(): UseStatementUploadReturn {
         setIsUploading(false)
     }, [])
 
-    const upload = useCallback(async (files: File[], memberId: string | null = null) => {
+    const upload = useCallback(async (files: File[], memberIds: string[] = []) => {
         setIsUploading(true)
 
         // Check for session
@@ -96,7 +98,7 @@ export function useStatementUpload(): UseStatementUploadReturn {
 
                 // Get the latest session to ensure we have the token
                 const { data: { session } } = await supabase.auth.getSession()
-                const { statementId } = await uploadStatement(uploadItem.file, memberId, session?.access_token)
+                const { statementId } = await uploadStatement(uploadItem.file, memberIds, session?.access_token)
 
                 // Success
                 setUploads(prev => prev.map(u => 
