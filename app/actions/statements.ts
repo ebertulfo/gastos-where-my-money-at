@@ -96,12 +96,17 @@ export async function getReviewData(statementId: string): Promise<ImportReview> 
 
   const statement = statementData as DBStatement
 
-  // 2. Fetch imports
+  // 2. Fetch imports — most-recent first matches /transactions UX, and
+  // is deterministic. Tie-break on created_at so same-day rows hold
+  // their PDF order (parser emits page-by-page, which is the closest
+  // signal to "the order the issuer printed them").
   const { data: importsData, error: importsError } = await (supabase as any)
     .from('transaction_imports')
     .select('*')
     .eq('statement_id', statementId)
-    .eq('resolution', 'pending') // Only pending items
+    .eq('resolution', 'pending')
+    .order('date', { ascending: false })
+    .order('created_at', { ascending: true })
 
   if (importsError) {
     throw new Error(`Failed to fetch imports: ${importsError.message}`)
