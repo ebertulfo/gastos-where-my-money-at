@@ -32,6 +32,12 @@ import { selectProfile } from "./profiles";
 import type { ParsedTable } from "./types";
 import { sanitizeDescription } from "./types";
 import type { RejectedRow, Transaction } from "./models";
+import {
+  extractStatementMetadata,
+  parseDateLoose,
+  resolveTransactionYear,
+  type StatementMetadata,
+} from "./metadata";
 
 /** Minimum combined text length to consider a PDF text-based (not scanned). */
 const MIN_TEXT_LENGTH = 50;
@@ -46,6 +52,12 @@ export class UnsupportedPdfError extends Error {
 export type ExtractResult = {
   tables: ParsedTable[];
   rejectedRows: RejectedRow[];
+  /**
+   * Bank, period, statement type, account-last-4 and currency parsed
+   * directly from the statement header. Authoritative for ingest — used
+   * over filename heuristics and over min/max(transaction dates).
+   */
+  statementMetadata: StatementMetadata;
 };
 
 export async function extractTablesFromPdf(buffer: Buffer): Promise<ParsedTable[]> {
@@ -121,6 +133,11 @@ export async function extractTablesAndRejections(buffer: Buffer): Promise<Extrac
     );
   }
 
+  // Statement-header metadata. Runs against the raw combined text so
+  // anchors like "STATEMENT DATE" / "as at" still resolve before any
+  // sanitisation strips identifiers.
+  const statementMetadata = extractStatementMetadata(combinedText, profile);
+
   const isCreditCard = profile === ALTITUDE_PROFILE;
   const isBank = profile === DBS_PROFILE;
 
@@ -155,8 +172,39 @@ export async function extractTablesAndRejections(buffer: Buffer): Promise<Extrac
     }
   }
 
-  const rowsWithIds = appendIdentifiers(rows, {
-    defaultYear,
+  // Resolve cross-year transactions ("26 JAN" on a 30 Dec 2025 credit-card
+  // statement → 2026, not 2025) by anchoring on the parsed statement
+  // period. Falls back to the previous heuristic when the period is
+  // unknown.
+  const resolvedRows = rows.map((row) => {
+    const [date, description, amount, balanceRaw] = row;
+    const dayMonth = date.match(/^(\d{1,2})\s+([A-Za-z]+)\b/);
+    if (!dayMonth) return row;
+    const day = Number(dayMonth[1]);
+    const monthToken = dayMonth[2].toLowerCase();
+    const monthNum = MONTH_BY_NAME[monthToken];
+    if (!monthNum) return row;
+    const year = resolveTransactionYear(day, monthNum, {
+      periodStart: statementMetadata.periodStart,
+      periodEnd: statementMetadata.periodEnd,
+      fallbackYear: defaultYear,
+    });
+    if (!year) return row;
+    return [`${day.toString().padStart(2, '0')} ${dayMonth[2].toUpperCase()} ${year}`, description, amount, balanceRaw];
+  });
+
+  // Prefer header-derived year for identifier generation when available.
+  const periodStartParsed = statementMetadata.periodStart
+    ? parseDateLoose(statementMetadata.periodStart)
+    : null;
+  const periodEndParsed = statementMetadata.periodEnd
+    ? parseDateLoose(statementMetadata.periodEnd)
+    : null;
+  const identifierYear =
+    periodEndParsed?.year ?? periodStartParsed?.year ?? defaultYear;
+
+  const rowsWithIds = appendIdentifiers(resolvedRows, {
+    defaultYear: identifierYear,
     balanceFallback: "0.00",
   });
 
@@ -167,12 +215,27 @@ export async function extractTablesAndRejections(buffer: Buffer): Promise<Extrac
     headers,
     rows: rowsWithIds,
     metadata: {
-      inferredYear: defaultYear,
+      inferredYear: identifierYear,
     },
   };
 
-  return { tables: [table], rejectedRows: allRejections };
+  return { tables: [table], rejectedRows: allRejections, statementMetadata };
 }
+
+const MONTH_BY_NAME: Record<string, number> = {
+  jan: 1, january: 1,
+  feb: 2, february: 2,
+  mar: 3, march: 3,
+  apr: 4, april: 4,
+  may: 5,
+  jun: 6, june: 6,
+  jul: 7, july: 7,
+  aug: 8, august: 8,
+  sep: 9, sept: 9, september: 9,
+  oct: 10, october: 10,
+  nov: 11, november: 11,
+  dec: 12, december: 12,
+};
 
 /* ---------- preserved helpers from the previous implementation ---------- */
 

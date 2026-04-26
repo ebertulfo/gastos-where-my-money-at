@@ -21,7 +21,12 @@ interface IngestOptions {
   metadata: {
     periodStart?: string;
     periodEnd?: string;
+    /** Bank display name parsed from the statement header (e.g. "DBS/POSB"). */
     bank?: string;
+    /** Statement type parsed from the statement header. */
+    statementType?: StatementTypeValue;
+    /** Last 4 digits of the card / account, parsed from the header. */
+    accountLast4?: string;
     currency?: string;
     /**
      * Optional household_members.id list selected by the uploader. A
@@ -121,14 +126,19 @@ export async function ingestStatement({
       throw new Error("Statement period start and end are required.");
   }
 
-  // 3. Privacy strip — derive type/bank from the original filename, then
-  // replace it with a redacted form before persisting. account_name is
-  // never stored.
-  const statementType = detectStatementType(fileName);
-  const bankSlug = metadata.bank ? metadata.bank.toLowerCase().replace(/\s+/g, '_') : detectBankSlug(fileName);
+  // 3. Privacy strip — prefer statement-header metadata over filename
+  // heuristics, fall back to the filename slug when the header didn't
+  // surface anything. account_name is never stored.
+  const statementType: StatementTypeValue =
+    metadata.statementType ?? detectStatementType(fileName);
+  const bankSlug = metadata.bank
+    ? metadata.bank.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+    : detectBankSlug(fileName);
   const redactedFileName = redactFileName(fileHash, statementType, bankSlug, metadata.periodStart);
 
-  // 4. Create Statement Record
+  // 4. Create Statement Record. Bank display value prefers the
+  // header-parsed humanised name ("DBS/POSB") so the UI doesn't have to
+  // re-humanise; account_last4 is the only PAN-derived field we store.
   const statementData: StatementInsert = {
     source_file_name: redactedFileName,
     source_file_sha256: fileHash,
@@ -136,6 +146,7 @@ export async function ingestStatement({
     period_start: metadata.periodStart,
     period_end: metadata.periodEnd,
     bank: metadata.bank || (bankSlug !== 'unknown' ? bankSlug : null),
+    account_last4: metadata.accountLast4 || null,
     currency: metadata.currency || 'SGD',
     status: 'ingesting',
     statement_type: statementType,

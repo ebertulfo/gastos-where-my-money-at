@@ -2,7 +2,7 @@
 import { NextResponse } from "next/server";
 import { checkRateLimit } from "@/lib/rate-limit";
 import {
-  extractTablesFromPdf,
+  extractTablesAndRejections,
   UnsupportedPdfError,
 } from "@/lib/pdf/extract-tables";
 import { ingestStatement } from "@/lib/db/ingest";
@@ -109,74 +109,46 @@ export async function POST(request: Request) {
       );
     }
 
-    // 1. Extract tables from PDF
-    const tables = await extractTablesFromPdf(buffer);
+    // 1. Extract tables + statement metadata from PDF.
+    const { tables, statementMetadata } = await extractTablesAndRejections(buffer);
 
-    // Flatten transactions from tables
-    const allRows: any[] = tables.flatMap(t => t.rows.map(row => {
-      // row is string[]: [Date, Description, Amount, Balance]
-      return {
+    // Flatten transactions from tables. Dates are now header-resolved
+    // YYYY-style ("04 DEC 2025") so we can derive the period from them
+    // reliably when the header anchor was missing.
+    const allRows: any[] = tables.flatMap((t) =>
+      t.rows.map((row) => ({
         date: row[0],
         description: row[1],
         amount: parseFloat(row[2].replace(/,/g, '')),
-        balance: row[3] ? parseFloat(row[3].replace(/,/g, '')) : undefined
-      };
-    })).filter(r => !isNaN(r.amount)); 
-    console.log(allRows);
-    console.log(`Extracted ${allRows.length} rows from PDF`); 
+        balance: row[3] ? parseFloat(row[3].replace(/,/g, '')) : undefined,
+      })),
+    ).filter((r) => !isNaN(r.amount));
+    console.log(`Extracted ${allRows.length} rows from PDF`);
+    console.log('Statement metadata:', statementMetadata);
 
-    // Calculate metadata from rows
-    let periodStart = '';
-    let periodEnd = '';
-    
-    // Get year inferred by the PDF parser (e.g. found in header "Statement as of ... 2024")
-    const inferredYear = tables.length > 0 ? tables[0].metadata?.inferredYear : undefined;
+    // 2. Choose period: header-derived first, then fall back to the row
+    // span. Dates are already YYYY-anchored so Date() parses them safely.
+    let periodStart = statementMetadata.periodStart ?? '';
+    let periodEnd = statementMetadata.periodEnd ?? '';
 
-    if (allRows.length > 0) {
-        // We need to parse arbitrary dates here to sort them.
-        
-        try {
-            // Helpers to parse date string to timestamp
-            const parseDate = (dStr: string) => {
-                let d = new Date(dStr);
-                
-                // Check if year is present in the string (4 digits)
-                const hasYear = /\d{4}/.test(dStr);
-                
-                // If the parser found a year in the document text, prefer that over current year
-                const fallbackYear = inferredYear || new Date().getFullYear();
-                
-                if (!hasYear) {
-                    d = new Date(`${dStr} ${fallbackYear}`);
-                }
-
-                // If still invalid or defaulted to 2001 (Node quirk for some formats)
-                // OR if we want to confirm the year matches the inferred one
-                if (isNaN(d.getTime()) || (d.getFullYear() === 2001 && !dStr.includes('2001'))) {
-                     d = new Date(`${dStr} ${fallbackYear}`);
-                }
-                
-                if (isNaN(d.getTime())) return 0;
-                return d.getTime();
-            };
-
-            const timestamps = allRows.map(r => parseDate(r.date)).filter(t => t > 0);
-            if (timestamps.length > 0) {
-                const min = new Date(Math.min(...timestamps));
-                const max = new Date(Math.max(...timestamps));
-                periodStart = min.toISOString().split('T')[0];
-                periodEnd = max.toISOString().split('T')[0];
-            }
-        } catch (e) {
-            console.warn("Failed to infer dates", e);
+    if ((!periodStart || !periodEnd) && allRows.length > 0) {
+      const timestamps = allRows
+        .map((r) => new Date(r.date).getTime())
+        .filter((t) => Number.isFinite(t) && t > 0);
+      if (timestamps.length > 0) {
+        if (!periodStart) {
+          periodStart = new Date(Math.min(...timestamps)).toISOString().split('T')[0];
         }
+        if (!periodEnd) {
+          periodEnd = new Date(Math.max(...timestamps)).toISOString().split('T')[0];
+        }
+      }
     }
-    
-    // Fallback if date inference failed
     if (!periodStart) periodStart = new Date().toISOString().split('T')[0];
     if (!periodEnd) periodEnd = new Date().toISOString().split('T')[0];
 
-    // 2. Ingest into Database
+    // 3. Ingest into Database — pass statement-derived bank/type so the
+    // ingester doesn't have to fall back to filename heuristics.
     const result = await ingestStatement({
       fileName: file.name,
       fileBuffer: buffer,
@@ -184,8 +156,10 @@ export async function POST(request: Request) {
       metadata: {
         periodStart,
         periodEnd,
-        // bank inferred from filename inside ingestStatement when undefined.
-        bank: undefined,
+        bank: statementMetadata.bank ?? undefined,
+        statementType: statementMetadata.statementType,
+        accountLast4: statementMetadata.accountLast4 ?? undefined,
+        currency: statementMetadata.currency ?? undefined,
         memberIds,
       },
       userId: user.id,
