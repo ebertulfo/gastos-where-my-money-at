@@ -13,5 +13,5 @@ Give all your houshold statements. System removes sensitive information and extr
 2. Redact sensitive information from statement
 3. Extract transactions from redacted statement
 4. Ask user to review transactions to exclude those that are NOT spend (e.g. transfer between accounts, payment for credit cards, etc.)
-5. All transactions gets given relevant metadata, gets tagged, and gets put inside Database for easy querying and semantic search
-6. Reports and Insights can now be viewed. Per statement, per person, per month, per year, or a combo. Know where you spend most of your money.
+5. All transactions get a category (AI suggests at ingest, you confirm or override on the review screen) and optional free-form labels. Foreign-currency spend is auto-flagged as travel. Categories are singular, hierarchical, and country-seeded; labels are many-per-row and user-driven.
+6. Reports and Insights can now be viewed. Per statement, per person, per month, per year, or a combo. Drill into a category to see the underlying transactions. Know where you spend most of your money.
