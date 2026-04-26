@@ -18,6 +18,22 @@ import { ALTITUDE_PROFILE, DBS_PROFILE, GENERIC_PROFILE } from './profiles'
 
 export type ParsedStatementType = 'debit' | 'credit' | 'investment'
 
+/**
+ * Reconciliation kinds — how the review screen should compare
+ * `expectedTotal` against the sum of extracted transaction_imports.
+ *
+ *   cc_new_charges_signed
+ *     Credit cards. expectedTotal = total_outstanding − previous_balance
+ *     (i.e. the net new activity for the cycle, signed). Compare against
+ *     sum(extracted, signed). Difference of ~0 = full reconciliation.
+ *
+ *   bank_withdrawals_abs
+ *     Bank statements. expectedTotal = total withdrawals printed at the
+ *     end of the document. Compare against sum(abs(extracted))
+ *     because the bank-statement parser only emits withdrawals.
+ */
+export type ExpectedTotalKind = 'cc_new_charges_signed' | 'bank_withdrawals_abs'
+
 export type StatementMetadata = {
   bank: string | null
   statementType: ParsedStatementType
@@ -25,6 +41,12 @@ export type StatementMetadata = {
   periodEnd: string | null   // YYYY-MM-DD
   accountLast4: string | null
   currency: string | null
+  /** Reconcile-against figure printed on the statement. */
+  expectedTotal: number | null
+  /** How to interpret expectedTotal. */
+  expectedTotalKind: ExpectedTotalKind | null
+  /** Credit cards only — opening balance of the cycle. */
+  previousBalance: number | null
 }
 
 const MONTH_LOOKUP: Record<string, number> = {
@@ -108,6 +130,13 @@ function extractCurrency(text: string): string | null {
   return null
 }
 
+/** Parses "1,234.56" / "1234.56" / "$1,234.56". null on failure. */
+function parseAmount(s: string): number | null {
+  const cleaned = s.replace(/[$\s]/g, '').replace(/,/g, '')
+  const n = Number(cleaned)
+  return Number.isFinite(n) ? n : null
+}
+
 // --- Profile-specific extractors ---------------------------------------------
 
 function extractAltitudeMetadata(text: string): StatementMetadata {
@@ -129,6 +158,34 @@ function extractAltitudeMetadata(text: string): StatementMetadata {
       ? 'DBS'
       : null
 
+  // Reconciliation anchor for credit cards. The parser emits ONLY the
+  // "NEW TRANSACTIONS" section, skipping any pre-section bill-payment
+  // line that clears the previous balance. So the right figure to
+  // reconcile against is the SUB-TOTAL printed for each card (= sum of
+  // new charges for that card, signed). On a multi-card consolidated
+  // statement there are several SUB-TOTAL lines, one per card, so we sum
+  // them all. PREVIOUS BALANCE is captured for display but no longer
+  // part of the reconciliation arithmetic.
+  const previousBalanceMatch = text.match(/PREVIOUS\s+BALANCE\s+([\d,]+\.\d{2})/i)
+  const previousBalance = previousBalanceMatch ? parseAmount(previousBalanceMatch[1]) : null
+
+  const subTotalMatches = [...text.matchAll(/\bSUB-TOTAL[:\s]+([\d,]+\.\d{2})/gi)]
+  let expectedTotal: number | null = null
+  let expectedTotalKind: ExpectedTotalKind | null = null
+  if (subTotalMatches.length > 0) {
+    let sum = 0
+    let valid = true
+    for (const m of subTotalMatches) {
+      const v = parseAmount(m[1])
+      if (v === null) { valid = false; break }
+      sum += v
+    }
+    if (valid) {
+      expectedTotal = Number(sum.toFixed(2))
+      expectedTotalKind = 'cc_new_charges_signed'
+    }
+  }
+
   return {
     bank,
     statementType: 'credit',
@@ -136,6 +193,9 @@ function extractAltitudeMetadata(text: string): StatementMetadata {
     periodEnd,
     accountLast4,
     currency: extractCurrency(text),
+    expectedTotal,
+    expectedTotalKind,
+    previousBalance,
   }
 }
 
@@ -172,6 +232,23 @@ function extractDbsDepositMetadata(text: string): StatementMetadata {
   const mentionsDbs = /\bDBS\b/i.test(text)
   const bank = mentionsDbs && mentionsPosb ? 'DBS/POSB' : mentionsDbs ? 'DBS' : mentionsPosb ? 'POSB' : null
 
+  // Reconciliation anchor — DBS/POSB statements print a master roll-up
+  // line "Total Balance Carried Forward in SGD: <withdrawals> <deposits>
+  // <closing>". Withdrawals total is the cleanest figure to reconcile
+  // against because the bank-statement parser emits withdrawals only.
+  const totalRollup = text.match(
+    /Total\s+Balance\s+Carried\s+Forward\s+in\s+SGD[:\s]+([\d,]+\.\d{2})\s+[\d,]+\.\d{2}\s+[\d,]+\.\d{2}/i,
+  )
+  let expectedTotal: number | null = null
+  let expectedTotalKind: ExpectedTotalKind | null = null
+  if (totalRollup) {
+    const withdrawals = parseAmount(totalRollup[1])
+    if (withdrawals !== null) {
+      expectedTotal = withdrawals
+      expectedTotalKind = 'bank_withdrawals_abs'
+    }
+  }
+
   return {
     bank,
     statementType,
@@ -179,6 +256,9 @@ function extractDbsDepositMetadata(text: string): StatementMetadata {
     periodEnd,
     accountLast4: null,
     currency: extractCurrency(text),
+    expectedTotal,
+    expectedTotalKind,
+    previousBalance: null,
   }
 }
 
@@ -240,6 +320,12 @@ function extractGenericMetadata(text: string): StatementMetadata {
     periodEnd,
     accountLast4: extractCardLast4(text),
     currency: extractCurrency(text),
+    // Generic profile makes no reconciliation claim. Specific profiles
+    // surface totals; everything else gets a "not reconcilable" badge in
+    // the review UI.
+    expectedTotal: null,
+    expectedTotalKind: null,
+    previousBalance: null,
   }
 }
 

@@ -3,14 +3,15 @@
 import { confirmStatementImport, deleteStatement, getPendingStatements, saveDuplicateDecision } from '@/app/actions/statements'
 import { ReviewTabs } from '@/app/imports/[statementId]/review/review-tabs'
 import { TransactionTable } from '@/components/transaction-table'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import type { Tag } from '@/lib/supabase/database.types'
-import type { ImportReview, Statement as UIStatement } from '@/lib/types/transaction'
-import { formatDate } from '@/lib/utils'
-import { Check, Loader2 } from 'lucide-react'
+import type { ImportReview, Statement as UIStatement, StatementReconciliation } from '@/lib/types/transaction'
+import { formatCurrency, formatDate } from '@/lib/utils'
+import { AlertTriangle, Check, CheckCircle2, Info, Loader2 } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
@@ -26,7 +27,7 @@ interface ReviewViewProps {
 
 export function ReviewView({ statementId, review, availableTags, pendingStatements }: ReviewViewProps) {
   const router = useRouter()
-  const { statement, newTransactions, duplicates } = review
+  const { statement, newTransactions, duplicates, reconciliation } = review
 
   const [duplicateDecisions, setDuplicateDecisions] = useState<DuplicateDecisions>(
     () => Object.fromEntries(duplicates.map(d => [d.importId, 'keep_existing' as const]))
@@ -112,6 +113,8 @@ export function ReviewView({ statementId, review, availableTags, pendingStatemen
           </Button>
         </div>
       </div>
+
+      <ReconciliationBanner reconciliation={reconciliation} />
 
       <Card className="mb-8 animate-fade-in">
         <CardContent className="p-6">
@@ -207,5 +210,56 @@ export function ReviewView({ statementId, review, availableTags, pendingStatemen
         <button onClick={() => setDuplicateDecision(duplicates[0].importId, 'add_new')} />
       )}
     </main>
+  )
+}
+
+function ReconciliationBanner({ reconciliation }: { reconciliation: StatementReconciliation }) {
+  if (reconciliation.status === 'unavailable') {
+    return (
+      <Alert className="mb-6 border-muted-foreground/30 bg-muted/40 animate-fade-in">
+        <Info className="h-4 w-4 text-muted-foreground" />
+        <AlertTitle className="text-sm">Couldn't read a verifiable total from this statement</AlertTitle>
+        <AlertDescription className="text-xs text-muted-foreground">
+          The reconciliation check is skipped — please eyeball the rows below to confirm nothing's missing.
+        </AlertDescription>
+      </Alert>
+    )
+  }
+
+  const expected = reconciliation.expectedTotal ?? 0
+  const extracted = reconciliation.extractedTotal ?? 0
+  const diff = reconciliation.diff ?? 0
+  const currency = reconciliation.currency
+  const kindLabel =
+    reconciliation.expectedTotalKind === 'cc_new_charges_signed'
+      ? 'New charges this cycle'
+      : 'Total withdrawals'
+
+  if (reconciliation.status === 'match') {
+    return (
+      <Alert className="mb-6 border-success/40 bg-success/5 animate-fade-in">
+        <CheckCircle2 className="h-4 w-4 text-success" />
+        <AlertTitle className="text-sm">Extracted total matches the statement</AlertTitle>
+        <AlertDescription className="text-xs text-muted-foreground">
+          {kindLabel}: {formatCurrency(expected, currency)} · Extracted{' '}
+          {formatCurrency(extracted, currency)} from the parsed rows below.
+        </AlertDescription>
+      </Alert>
+    )
+  }
+
+  return (
+    <Alert className="mb-6 border-warning/50 bg-warning/5 animate-fade-in">
+      <AlertTriangle className="h-4 w-4 text-warning" />
+      <AlertTitle className="text-sm">Extracted total doesn't match the statement</AlertTitle>
+      <AlertDescription className="text-xs text-muted-foreground">
+        {kindLabel}: {formatCurrency(expected, currency)} · Extracted{' '}
+        {formatCurrency(extracted, currency)} ·{' '}
+        <span className="font-medium text-foreground">
+          Diff {diff > 0 ? '+' : ''}{formatCurrency(diff, currency)}
+        </span>
+        . Some rows may be missing or duplicated — please review carefully before confirming.
+      </AlertDescription>
+    </Alert>
   )
 }

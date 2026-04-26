@@ -28,6 +28,11 @@ interface IngestOptions {
     /** Last 4 digits of the card / account, parsed from the header. */
     accountLast4?: string;
     currency?: string;
+    /** Reconciliation anchor (cycle close − previous balance for cards, total withdrawals for banks). */
+    expectedTotal?: number | null;
+    expectedTotalKind?: 'cc_new_charges_signed' | 'bank_withdrawals_abs' | null;
+    /** Credit cards only. */
+    previousBalance?: number | null;
     /**
      * Optional household_members.id list selected by the uploader. A
      * statement can belong to more than one member (joint cards,
@@ -150,6 +155,9 @@ export async function ingestStatement({
     currency: metadata.currency || 'SGD',
     status: 'ingesting',
     statement_type: statementType,
+    expected_total: metadata.expectedTotal ?? null,
+    expected_total_kind: metadata.expectedTotalKind ?? null,
+    previous_balance: metadata.previousBalance ?? null,
   };
 
   const { data, error: statementError } = await (supabase as any)

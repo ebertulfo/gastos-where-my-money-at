@@ -2,7 +2,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
-import { ImportReview, DuplicatePair, ImportDecisions, Transaction, Statement as UIStatement } from '@/lib/types/transaction'
+import { ImportReview, DuplicatePair, ImportDecisions, StatementReconciliation, Transaction, Statement as UIStatement } from '@/lib/types/transaction'
 import { Database } from '@/lib/supabase/database.types'
 import { embedTransactions } from '@/lib/suggest/embed'
 import { humanizeBankSlug } from '@/lib/utils'
@@ -116,10 +116,58 @@ export async function getReviewData(statementId: string): Promise<ImportReview> 
   // 4. Skip fetching existing duplicates as we don't show them anymore
   const duplicates: DuplicatePair[] = [] // Empty list for spec 6
 
+  // 5. Reconciliation: compare the statement's printed total against the
+  // sum of extracted import amounts. Sign convention depends on kind so
+  // the credit-card "signed" sum (refunds reduce) and bank "abs" sum
+  // (parser only emits withdrawals) both reconcile cleanly.
+  const reconciliation = computeReconciliation(statement, imports)
+
   return {
     statement: mapDBStatementToUI(statement, imports.length),
     newTransactions: newImports.map(i => mapImportToTransaction(i, statement.currency || 'SGD')),
     duplicates,
+    reconciliation,
+  }
+}
+
+const RECONCILIATION_TOLERANCE = 0.5
+
+function computeReconciliation(
+  statement: DBStatement & { expected_total?: number | null; expected_total_kind?: string | null },
+  imports: DBImport[],
+): StatementReconciliation {
+  const currency = statement.currency || 'SGD'
+  const expectedTotal = statement.expected_total ?? null
+  const kind = (statement.expected_total_kind ?? null) as StatementReconciliation['expectedTotalKind']
+
+  if (expectedTotal === null || kind === null) {
+    return {
+      status: 'unavailable',
+      expectedTotal: null,
+      expectedTotalKind: null,
+      extractedTotal: null,
+      diff: null,
+      currency,
+    }
+  }
+
+  // Aggregate amounts according to the kind's sign convention. Both
+  // numbers are normalised to the same shape so diff is just a subtraction.
+  const extractedTotal = imports.reduce((acc, imp) => {
+    const amt = Number(imp.amount) || 0
+    return acc + (kind === 'bank_withdrawals_abs' ? Math.abs(amt) : amt)
+  }, 0)
+
+  const diff = Number((extractedTotal - expectedTotal).toFixed(2))
+  const status: StatementReconciliation['status'] = Math.abs(diff) <= RECONCILIATION_TOLERANCE ? 'match' : 'mismatch'
+
+  return {
+    status,
+    expectedTotal,
+    expectedTotalKind: kind,
+    extractedTotal: Number(extractedTotal.toFixed(2)),
+    diff,
+    currency,
   }
 }
 

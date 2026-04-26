@@ -40,9 +40,12 @@ export type Database = {
           bank: string | null
           created_at: string
           currency: string
+          expected_total: number | null
+          expected_total_kind: string | null
           id: string
           period_end: string
           period_start: string
+          previous_balance: number | null
           source_file_name: string
           source_file_sha256: string
           statement_type: Database["public"]["Enums"]["statement_type"]
@@ -57,9 +60,12 @@ export type Database = {
           bank?: string | null
           created_at?: string
           currency?: string
+          expected_total?: number | null
+          expected_total_kind?: string | null
           id?: string
           period_end: string
           period_start: string
+          previous_balance?: number | null
           source_file_name: string
           source_file_sha256: string
           statement_type: Database["public"]["Enums"]["statement_type"]
@@ -74,9 +80,12 @@ export type Database = {
           bank?: string | null
           created_at?: string
           currency?: string
+          expected_total?: number | null
+          expected_total_kind?: string | null
           id?: string
           period_end?: string
           period_start?: string
+          previous_balance?: number | null
           source_file_name?: string
           source_file_sha256?: string
           statement_type?: Database["public"]["Enums"]["statement_type"]
