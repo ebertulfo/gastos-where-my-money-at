@@ -32,6 +32,7 @@ export async function getTags() {
     const { data: tags, error } = await supabase
         .from('tags')
         .select('*')
+        .eq('kind', 'label')
         .order('name')
 
     if (error) {
@@ -65,6 +66,7 @@ export async function createTag(input: CreateTagInput) {
             parent_id: input.parentId || null,
             color: input.color || null,
             user_id: user.user.id,
+            kind: 'label',
         } as any)
         .select()
         .single()

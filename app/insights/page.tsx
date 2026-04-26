@@ -1,4 +1,7 @@
 import { getStatements } from '@/app/actions/statements'
+import { getHouseholdMembers } from '@/app/actions/household-members'
+import { getTags } from '@/app/actions/tags'
+import { getCategories } from '@/app/actions/categories'
 import {
   getAvailableMonthsList,
   getInsights,
@@ -15,7 +18,7 @@ import Link from 'next/link'
 export const dynamic = 'force-dynamic'
 
 interface PageProps {
-  searchParams: Promise<{ period?: string; value?: string }>
+  searchParams: Promise<{ period?: string; value?: string; members?: string; travel?: string }>
 }
 
 function parsePeriod(
@@ -45,10 +48,13 @@ function parsePeriod(
 export default async function InsightsPage({ searchParams }: PageProps) {
   const params = await searchParams
 
-  const [availableMonths, availableYears, statements] = await Promise.all([
+  const [availableMonths, availableYears, statements, householdMembers, tags, categories] = await Promise.all([
     getAvailableMonthsList(),
     getYearsWithDataList(),
     getStatements(),
+    getHouseholdMembers(),
+    getTags(),
+    getCategories(),
   ])
 
   const availableStatements = statements.map(s => ({
@@ -92,7 +98,21 @@ export default async function InsightsPage({ searchParams }: PageProps) {
     )
   }
 
-  const insights = await getInsights(period)
+  const validMemberIds = new Set(householdMembers.map(m => m.id))
+  const requestedMemberIds = (params.members ?? '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
+    .filter(id => validMemberIds.has(id))
+
+  const travelMode = params.travel === 'only' ? 'travel'
+    : params.travel === 'exclude' ? 'no-travel'
+    : 'all'
+
+  const insights = await getInsights(period, {
+    memberIds: requestedMemberIds,
+    travelMode,
+  })
 
   return (
     <div className="min-h-screen bg-background">
@@ -104,6 +124,19 @@ export default async function InsightsPage({ searchParams }: PageProps) {
           availableMonths={availableMonths}
           availableYears={availableYears}
           availableStatements={availableStatements}
+          householdMembers={householdMembers.map(m => ({
+            id: m.id,
+            name: m.name,
+            color: m.color,
+          }))}
+          selectedMemberIds={requestedMemberIds}
+          travelMode={travelMode}
+          availableTags={tags}
+          availableCategories={categories.map(c => ({
+            id: c.id,
+            name: c.name,
+            parent_id: c.parent_id,
+          }))}
         />
       </main>
     </div>

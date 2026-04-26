@@ -1,5 +1,6 @@
 import { getPendingStatements, getReviewData } from '@/app/actions/statements'
 import { getTags } from '@/app/actions/tags'
+import { getCategories } from '@/app/actions/categories'
 import { NavHeader } from '@/components/nav-header'
 import { ReviewView } from '@/components/review-view'
 import { Button } from '@/components/ui/button'
@@ -35,8 +36,9 @@ export default async function ReviewPage({ params }: ReviewPageProps) {
     )
   }
 
-  const [availableTags, pendingStatements] = await Promise.all([
+  const [availableTags, availableCategories, pendingStatements] = await Promise.all([
     getTags(),
+    getCategories(),
     getPendingStatements(),
   ])
 
@@ -47,6 +49,11 @@ export default async function ReviewPage({ params }: ReviewPageProps) {
         statementId={statementId}
         review={review}
         availableTags={availableTags}
+        availableCategories={availableCategories.map(c => ({
+          id: c.id,
+          name: c.name,
+          parent_id: c.parent_id,
+        }))}
         pendingStatements={pendingStatements}
       />
     </div>

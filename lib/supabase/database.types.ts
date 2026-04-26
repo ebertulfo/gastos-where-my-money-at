@@ -34,6 +34,66 @@ export type Database = {
   }
   public: {
     Tables: {
+      household_members: {
+        Row: {
+          color: string | null
+          created_at: string
+          id: string
+          name: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          color?: string | null
+          created_at?: string
+          id?: string
+          name: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          color?: string | null
+          created_at?: string
+          id?: string
+          name?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      statement_members: {
+        Row: {
+          created_at: string
+          member_id: string
+          statement_id: string
+        }
+        Insert: {
+          created_at?: string
+          member_id: string
+          statement_id: string
+        }
+        Update: {
+          created_at?: string
+          member_id?: string
+          statement_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "statement_members_member_id_fkey"
+            columns: ["member_id"]
+            isOneToOne: false
+            referencedRelation: "household_members"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "statement_members_statement_id_fkey"
+            columns: ["statement_id"]
+            isOneToOne: false
+            referencedRelation: "statements"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       statements: {
         Row: {
           account_last4: string | null
@@ -97,66 +157,6 @@ export type Database = {
         }
         Relationships: []
       }
-      household_members: {
-        Row: {
-          id: string
-          user_id: string
-          name: string
-          color: string | null
-          created_at: string
-          updated_at: string
-        }
-        Insert: {
-          id?: string
-          user_id: string
-          name: string
-          color?: string | null
-          created_at?: string
-          updated_at?: string
-        }
-        Update: {
-          id?: string
-          user_id?: string
-          name?: string
-          color?: string | null
-          created_at?: string
-          updated_at?: string
-        }
-        Relationships: []
-      }
-      statement_members: {
-        Row: {
-          statement_id: string
-          member_id: string
-          created_at: string
-        }
-        Insert: {
-          statement_id: string
-          member_id: string
-          created_at?: string
-        }
-        Update: {
-          statement_id?: string
-          member_id?: string
-          created_at?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "statement_members_statement_id_fkey"
-            columns: ["statement_id"]
-            isOneToOne: false
-            referencedRelation: "statements"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "statement_members_member_id_fkey"
-            columns: ["member_id"]
-            isOneToOne: false
-            referencedRelation: "household_members"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       tags: {
         Row: {
           color: string | null
@@ -164,6 +164,7 @@ export type Database = {
           description: string | null
           embedding: string | null
           id: string
+          kind: string
           name: string
           parent_id: string | null
           user_id: string
@@ -174,6 +175,7 @@ export type Database = {
           description?: string | null
           embedding?: string | null
           id?: string
+          kind?: string
           name: string
           parent_id?: string | null
           user_id: string
@@ -184,6 +186,7 @@ export type Database = {
           description?: string | null
           embedding?: string | null
           id?: string
+          kind?: string
           name?: string
           parent_id?: string | null
           user_id?: string
@@ -202,13 +205,17 @@ export type Database = {
         Row: {
           amount: number
           balance: number | null
+          category_id: string | null
+          category_source: string | null
           created_at: string
           date: string
           description: string
+          description_embedding: string | null
           exclusion_reason: string | null
           existing_transaction_id: string | null
           id: string
           is_excluded: boolean | null
+          is_travel: boolean
           line_number: number | null
           month_bucket: string
           notes: string | null
@@ -221,13 +228,17 @@ export type Database = {
         Insert: {
           amount: number
           balance?: number | null
+          category_id?: string | null
+          category_source?: string | null
           created_at?: string
           date: string
           description: string
+          description_embedding?: string | null
           exclusion_reason?: string | null
           existing_transaction_id?: string | null
           id?: string
           is_excluded?: boolean | null
+          is_travel?: boolean
           line_number?: number | null
           month_bucket: string
           notes?: string | null
@@ -240,13 +251,17 @@ export type Database = {
         Update: {
           amount?: number
           balance?: number | null
+          category_id?: string | null
+          category_source?: string | null
           created_at?: string
           date?: string
           description?: string
+          description_embedding?: string | null
           exclusion_reason?: string | null
           existing_transaction_id?: string | null
           id?: string
           is_excluded?: boolean | null
+          is_travel?: boolean
           line_number?: number | null
           month_bucket?: string
           notes?: string | null
@@ -257,6 +272,13 @@ export type Database = {
           updated_at?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "transaction_imports_category_id_fkey"
+            columns: ["category_id"]
+            isOneToOne: false
+            referencedRelation: "tags"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "transaction_imports_existing_transaction_id_fkey"
             columns: ["existing_transaction_id"]
@@ -313,6 +335,8 @@ export type Database = {
         Row: {
           amount: number
           balance: number | null
+          category_id: string | null
+          category_source: string | null
           created_at: string
           date: string
           description: string
@@ -320,6 +344,7 @@ export type Database = {
           exclusion_reason: string | null
           id: string
           is_excluded: boolean
+          is_travel: boolean
           line_number: number | null
           month_bucket: string
           statement_id: string
@@ -332,6 +357,8 @@ export type Database = {
         Insert: {
           amount: number
           balance?: number | null
+          category_id?: string | null
+          category_source?: string | null
           created_at?: string
           date: string
           description: string
@@ -339,6 +366,7 @@ export type Database = {
           exclusion_reason?: string | null
           id?: string
           is_excluded?: boolean
+          is_travel?: boolean
           line_number?: number | null
           month_bucket: string
           statement_id: string
@@ -351,6 +379,8 @@ export type Database = {
         Update: {
           amount?: number
           balance?: number | null
+          category_id?: string | null
+          category_source?: string | null
           created_at?: string
           date?: string
           description?: string
@@ -358,6 +388,7 @@ export type Database = {
           exclusion_reason?: string | null
           id?: string
           is_excluded?: boolean
+          is_travel?: boolean
           line_number?: number | null
           month_bucket?: string
           statement_id?: string
@@ -368,6 +399,13 @@ export type Database = {
           user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "transactions_category_id_fkey"
+            columns: ["category_id"]
+            isOneToOne: false
+            referencedRelation: "tags"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "transactions_statement_id_fkey"
             columns: ["statement_id"]
@@ -418,11 +456,48 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      knn_nearest_categories: {
+        Args: { p_embedding: string; p_limit?: number; p_user_id: string }
+        Returns: {
+          id: string
+          name: string
+          parent_id: string
+          similarity: number
+        }[]
+      }
       knn_nearest_tags: {
         Args: { p_embedding: string; p_limit?: number; p_user_id: string }
         Returns: {
           id: string
           name: string
+          similarity: number
+        }[]
+      }
+      knn_neighbour_categories: {
+        Args: {
+          p_embedding: string
+          p_exclude_id: string
+          p_limit?: number
+          p_user_id: string
+        }
+        Returns: {
+          category_id: string
+          description: string
+          id: string
+          similarity: number
+        }[]
+      }
+      knn_neighbour_categories_for_imports: {
+        Args: {
+          p_embedding: string
+          p_exclude_id: string
+          p_limit?: number
+          p_user_id: string
+        }
+        Returns: {
+          category_id: string
+          description: string
+          id: string
           similarity: number
         }[]
       }
@@ -584,33 +659,26 @@ export const Constants = {
   },
 } as const
 
-
-
-// Helper types for easier usage
+// Convenience aliases used throughout the app.
 export type Statement = Database['public']['Tables']['statements']['Row']
 export type StatementInsert = Database['public']['Tables']['statements']['Insert']
 export type StatementUpdate = Database['public']['Tables']['statements']['Update']
-
 export type Transaction = Database['public']['Tables']['transactions']['Row']
 export type TransactionInsert = Database['public']['Tables']['transactions']['Insert']
 export type TransactionUpdate = Database['public']['Tables']['transactions']['Update']
-
 export type TransactionImport = Database['public']['Tables']['transaction_imports']['Row']
 export type TransactionImportInsert = Database['public']['Tables']['transaction_imports']['Insert']
 export type TransactionImportUpdate = Database['public']['Tables']['transaction_imports']['Update']
-
 export type StatementType = Database['public']['Enums']['statement_type']
 export type StatementStatus = Database['public']['Enums']['statement_status']
 export type ImportResolution = Database['public']['Enums']['import_resolution']
 export type TransactionStatus = Database['public']['Enums']['transaction_status']
-
 export type HouseholdMember = Database['public']['Tables']['household_members']['Row']
 export type HouseholdMemberInsert = Database['public']['Tables']['household_members']['Insert']
 export type HouseholdMemberUpdate = Database['public']['Tables']['household_members']['Update']
-
 export type Tag = Database['public']['Tables']['tags']['Row']
 export type TagInsert = Database['public']['Tables']['tags']['Insert']
 export type TagUpdate = Database['public']['Tables']['tags']['Update']
-
 export type TransactionTag = Database['public']['Tables']['transaction_tags']['Row']
 export type TransactionTagInsert = Database['public']['Tables']['transaction_tags']['Insert']
+

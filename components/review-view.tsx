@@ -1,8 +1,10 @@
 'use client'
 
 import { confirmStatementImport, deleteStatement, getPendingStatements, saveDuplicateDecision } from '@/app/actions/statements'
+import { setImportCategory, confirmAiImportCategory } from '@/app/actions/categories'
 import { ReviewTabs } from '@/app/imports/[statementId]/review/review-tabs'
 import { TransactionTable } from '@/components/transaction-table'
+import type { CategoryOption } from '@/components/category-picker'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -22,10 +24,11 @@ interface ReviewViewProps {
   statementId: string
   review: ImportReview
   availableTags: Tag[]
+  availableCategories: CategoryOption[]
   pendingStatements: UIStatement[]
 }
 
-export function ReviewView({ statementId, review, availableTags, pendingStatements }: ReviewViewProps) {
+export function ReviewView({ statementId, review, availableTags, availableCategories, pendingStatements }: ReviewViewProps) {
   const router = useRouter()
   const { statement, newTransactions, duplicates, reconciliation } = review
 
@@ -195,9 +198,19 @@ export function ReviewView({ statementId, review, availableTags, pendingStatemen
           <TransactionTable
             transactions={newTransactions}
             availableTags={availableTags}
+            availableCategories={availableCategories}
             showSource={false}
             emptyMessage="No new transactions found."
             enableTagging={false}
+            enableCategory={true}
+            onCategoryChangeOverride={async (importId, categoryId) => {
+              await setImportCategory(importId, categoryId)
+              router.refresh()
+            }}
+            onConfirmAiCategoryOverride={async (importId) => {
+              await confirmAiImportCategory(importId)
+              router.refresh()
+            }}
           />
         </CardContent>
       </Card>

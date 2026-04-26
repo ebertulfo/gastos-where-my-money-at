@@ -14,8 +14,10 @@ export const dynamic = 'force-dynamic';
 // Ensure Node.js runtime for pdf-parse compatibility
 export const runtime = "nodejs";
 
-// Allow up to 30 seconds for PDF processing and DB operations
-export const maxDuration = 30;
+// Allow extra wall time so the AI categorization (free signals + LLM)
+// completes during ingest. ~10s parse, ~3s embed batch, ~10-30s LLM cold
+// tail. Vercel hint; local dev ignores this.
+export const maxDuration = 90;
 
 /** Maximum file size in bytes (2 MB to be safe for statements) */
 const MAX_FILE_SIZE = 4 * 1024 * 1024; // 4MB

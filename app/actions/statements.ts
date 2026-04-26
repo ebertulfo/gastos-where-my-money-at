@@ -4,7 +4,6 @@ import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { ImportReview, DuplicatePair, ImportDecisions, StatementReconciliation, Transaction, Statement as UIStatement } from '@/lib/types/transaction'
 import { Database } from '@/lib/supabase/database.types'
-import { embedTransactions } from '@/lib/suggest/embed'
 import { humanizeBankSlug } from '@/lib/utils'
 
 type DBTransaction = Database['public']['Tables']['transactions']['Row']
@@ -51,18 +50,26 @@ function mapDBTransaction(t: DBTransaction): Transaction {
     description: t.description,
     amount: t.amount,
     currency: 'SGD', // TODO: Fetch from statement or store on transaction
-    source: `Db: ${t.statement_id}`, // Simplified for now
+    source: `Db: ${t.statement_id}`,
     monthBucket: t.month_bucket,
     transactionIdentifier: t.transaction_identifier,
     statementId: t.statement_id,
     isExcluded: t.is_excluded || false,
     exclusionReason: t.exclusion_reason || undefined,
+    category: null,
+    categorySource: null,
+    isTravel: Boolean((t as any).is_travel),
     tags: [],
     createdAt: t.created_at,
   }
 }
 
-function mapImportToTransaction(t: DBImport, currency: string): Transaction {
+function mapImportToTransaction(
+  t: DBImport,
+  currency: string,
+  categoryById: Map<string, { id: string; name: string; color: string | null; parent_name: string | null }>,
+): Transaction {
+  const cat = (t as any).category_id ? categoryById.get((t as any).category_id) : null
   return {
     id: t.id, // Using import ID as transaction ID for preview
     date: t.date,
@@ -75,6 +82,11 @@ function mapImportToTransaction(t: DBImport, currency: string): Transaction {
     statementId: t.statement_id,
     isExcluded: t.is_excluded || false,
     exclusionReason: t.exclusion_reason || undefined,
+    category: cat
+      ? { id: cat.id, name: cat.name, parentName: cat.parent_name, color: cat.color }
+      : null,
+    categorySource: ((t as any).category_source as 'user' | 'ai' | null) ?? null,
+    isTravel: Boolean((t as any).is_travel),
     tags: [],
     createdAt: t.created_at,
   }
@@ -114,22 +126,45 @@ export async function getReviewData(statementId: string): Promise<ImportReview> 
 
   const imports = importsData as DBImport[]
 
-  // 3. Separate into new and duplicates
+  // 3. Resolve category names for AI-applied + user-applied categories so we
+  // can render pills without an extra round-trip on the client.
+  const categoryIds = Array.from(
+    new Set(
+      imports
+        .map(i => (i as any).category_id as string | null)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  )
+  const categoryById = new Map<string, { id: string; name: string; color: string | null; parent_name: string | null }>()
+  if (categoryIds.length > 0) {
+    const { data: catData } = await (supabase as any)
+      .from('tags')
+      .select('id, name, color, parent_id, parent:tags!parent_id (name)')
+      .in('id', categoryIds)
+    for (const c of (catData ?? []) as { id: string; name: string; color: string | null; parent_id: string | null; parent: { name: string } | null }[]) {
+      categoryById.set(c.id, {
+        id: c.id,
+        name: c.name,
+        color: c.color,
+        parent_name: c.parent?.name ?? null,
+      })
+    }
+  }
+
+  // 4. Separate into new and duplicates
   const newImports = imports.filter(i => !i.existing_transaction_id)
   const duplicateImports = imports.filter(i => i.existing_transaction_id)
 
-  // 4. Skip fetching existing duplicates as we don't show them anymore
+  // 5. Skip fetching existing duplicates as we don't show them anymore
   const duplicates: DuplicatePair[] = [] // Empty list for spec 6
 
-  // 5. Reconciliation: compare the statement's printed total against the
-  // sum of extracted import amounts. Sign convention depends on kind so
-  // the credit-card "signed" sum (refunds reduce) and bank "abs" sum
-  // (parser only emits withdrawals) both reconcile cleanly.
+  // 6. Reconciliation: compare the statement's printed total against the
+  // sum of extracted import amounts.
   const reconciliation = computeReconciliation(statement, imports)
 
   return {
     statement: mapDBStatementToUI(statement, imports.length),
-    newTransactions: newImports.map(i => mapImportToTransaction(i, statement.currency || 'SGD')),
+    newTransactions: newImports.map(i => mapImportToTransaction(i, statement.currency || 'SGD', categoryById)),
     duplicates,
     reconciliation,
   }
@@ -193,14 +228,24 @@ export async function confirmStatementImport(
     return { success: false, error: fetchError?.message || 'No imports found' }
   }
 
-  const imports = importsData as DBImport[]
+  const initialImports = importsData as DBImport[]
 
   // 2. Process decisions
-  // Create a map of decision by importId
   const decisionMap = new Map(decisions.map(d => [d.importId, d.action]))
-
-  const transactionsToInsert: any[] = []
   const importsToUpdate: { id: string; resolution: 'accepted' | 'rejected' }[] = []
+  const acceptedImportIds: string[] = []
+
+  for (const imp of initialImports) {
+    const action = decisionMap.get(imp.id)
+    let resolution: 'accepted' | 'rejected' = 'rejected'
+    if (!imp.existing_transaction_id) {
+      if (action === 'accept') resolution = 'accepted'
+    } else {
+      if (action === 'accept') resolution = 'accepted'
+    }
+    importsToUpdate.push({ id: imp.id, resolution })
+    if (resolution === 'accepted') acceptedImportIds.push(imp.id)
+  }
 
   // Need uploader for transactions, period_end for the post-confirm redirect.
   const { data: statementData } = await (supabase as any)
@@ -212,56 +257,37 @@ export async function confirmStatementImport(
 
   const statement = statementData as { uploaded_by: string; period_end: string | null }
 
-  for (const imp of imports) {
-    const action = decisionMap.get(imp.id)
-    // Default for new transactions (null existing_id) is accept if not specified? 
-    // Or we assume the UI sends "accept" for everything in the "New" section.
-    // For duplicates, if action is missing, we default to reject (keep existing).
-    // Actually, let's strictly follow what was sent. If not sent, we skip/error?
-    // Or we treat "New" ones as accepted by default?
-    // The Spec says "Single Accept all new transactions action".
-
-    let resolution: 'accepted' | 'rejected' = 'rejected'
-
-    if (!imp.existing_transaction_id) {
-      // It's a new transaction. 
-      // If action is explicit reject, we reject. Otherwise verify if we should Auto-accept?
-      // The UI sends explicit actions for everything.
-      if (action === 'accept') resolution = 'accepted'
-    } else {
-      // It's a duplicate.
-      // If action is 'accept', we add as new.
-      // If action is 'reject' (or missing), we keep existing (reject import).
-      if (action === 'accept') resolution = 'accepted'
-    }
-
-    importsToUpdate.push({ id: imp.id, resolution })
-
-    if (resolution === 'accepted') {
-      transactionsToInsert.push({
-        user_id: statement.uploaded_by,
-        statement_id: imp.statement_id,
-        transaction_identifier: imp.transaction_identifier,
-        date: imp.date,
-        month_bucket: imp.month_bucket,
-        description: imp.description,
-        amount: imp.amount,
-        balance: imp.balance,
-        statement_page: imp.statement_page,
-        line_number: imp.line_number,
-        status: 'active',
-        is_excluded: imp.is_excluded,
-        exclusion_reason: imp.exclusion_reason,
-      })
-    }
+  // 2b. Categorization already happened at ingest (free signals + LLM)
+  // so this is a clean read of staging. No more OpenAI calls at confirm.
+  let accepted: DBImport[] = []
+  if (acceptedImportIds.length > 0) {
+    const { data: refreshed } = await (supabase as any)
+      .from('transaction_imports')
+      .select('*')
+      .in('id', acceptedImportIds)
+    accepted = (refreshed ?? []) as DBImport[]
   }
 
-  // Map import.id → transaction_identifier so we can resolve the new
-  // transaction.id after insert and apply tag decisions.
-  const importIdToIdentifier = new Map<string, string>()
-  for (const imp of imports) {
-    importIdToIdentifier.set(imp.id, imp.transaction_identifier)
-  }
+  // 3. Build transactionsToInsert from the re-fetched, fully-categorized rows.
+  const transactionsToInsert: any[] = accepted.map(imp => ({
+    user_id: statement.uploaded_by,
+    statement_id: imp.statement_id,
+    transaction_identifier: imp.transaction_identifier,
+    date: imp.date,
+    month_bucket: imp.month_bucket,
+    description: imp.description,
+    amount: imp.amount,
+    balance: imp.balance,
+    statement_page: imp.statement_page,
+    line_number: imp.line_number,
+    status: 'active',
+    is_excluded: imp.is_excluded,
+    exclusion_reason: imp.exclusion_reason,
+    category_id: (imp as any).category_id ?? null,
+    category_source: (imp as any).category_source ?? null,
+    description_embedding: (imp as any).description_embedding ?? null,
+    is_travel: (imp as any).is_travel ?? false,
+  }))
 
   if (transactionsToInsert.length > 0) {
     const { error: insertError } = await (supabase as any)
@@ -306,28 +332,8 @@ export async function confirmStatementImport(
     await (supabase as any).from('transaction_imports').update({ resolution: 'rejected' }).in('id', rejectedIds)
   }
 
-  // 3. Embed the just-promoted transactions so KNN suggestions work the
-  // first time the user opens TagInput on them. Best-effort; never blocks.
-  if (acceptedIds.length > 0) {
-    const acceptedIdentifiers = acceptedIds
-      .map(id => importIdToIdentifier.get(id))
-      .filter((s): s is string => Boolean(s))
-
-    if (acceptedIdentifiers.length > 0) {
-      const { data: newTxsData } = await (supabase as any)
-        .from('transactions')
-        .select('id')
-        .eq('user_id', statement.uploaded_by)
-        .in('transaction_identifier', acceptedIdentifiers)
-
-      const newTxIds = ((newTxsData ?? []) as { id: string }[]).map(t => t.id)
-      if (newTxIds.length > 0) {
-        await embedTransactions(supabase, newTxIds)
-      }
-    }
-  }
-
-  // 4. Mark statement as ingested
+  // Mark statement as ingested. Categories were filled in at step 2b
+  // (LLM fallback) and promoted in step 3.
   await (supabase as any)
     .from('statements')
     .update({ status: 'ingested' })
@@ -338,7 +344,7 @@ export async function confirmStatementImport(
 
   // Pick the month bucket the user should land on. Prefer accepted rows so the
   // landing page is non-empty; fall back to statement period_end.
-  const acceptedMonths = imports
+  const acceptedMonths = initialImports
     .filter(i => decisionMap.get(i.id) === 'accept' || !i.existing_transaction_id)
     .map(i => i.month_bucket)
     .filter((m): m is string => Boolean(m))

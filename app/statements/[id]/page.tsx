@@ -1,6 +1,7 @@
 
 import { getStatementById } from '@/app/actions/statements'
 import { getTags } from '@/app/actions/tags'
+import { getCategories } from '@/app/actions/categories'
 import { getTransactions } from '@/app/actions/transactions'
 import { NavHeader } from '@/components/nav-header'
 import { TransactionTable } from '@/components/transaction-table'
@@ -26,10 +27,11 @@ export default async function StatementDetailPage(props: PageProps) {
         id
     } = params;
 
-    const [statement, transactions, tags] = await Promise.all([
+    const [statement, transactions, tags, categories] = await Promise.all([
         getStatementById(id),
         getTransactions(null, id),
-        getTags()
+        getTags(),
+        getCategories(),
     ])
 
     if (!statement) {
@@ -119,11 +121,17 @@ export default async function StatementDetailPage(props: PageProps) {
 
                 <div className="space-y-4">
                     <h2 className="text-xl font-semibold">Transactions</h2>
-                    <TransactionTable 
-                        transactions={transactions} 
-                        availableTags={tags} 
-                        showSource={false} 
+                    <TransactionTable
+                        transactions={transactions}
+                        availableTags={tags}
+                        availableCategories={categories.map(c => ({
+                            id: c.id,
+                            name: c.name,
+                            parent_id: c.parent_id,
+                        }))}
+                        showSource={false}
                         enableTagging={true}
+                        enableCategory={true}
                     />
                 </div>
             </main>

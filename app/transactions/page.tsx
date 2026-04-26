@@ -1,5 +1,6 @@
 import { refreshTransactionData } from '@/app/actions/composite'
 import { getTags } from '@/app/actions/tags'
+import { getCategories } from '@/app/actions/categories'
 import { getAvailableMonthsList, getStatementsForMonth } from '@/app/actions/transactions'
 import { NavHeader } from '@/components/nav-header'
 import { TransactionsView } from '@/components/transactions-view'
@@ -16,10 +17,11 @@ interface Props {
 export default async function TransactionsPage({ searchParams }: Props) {
     const params = await searchParams;
 
-    // 1. Fetch available months and tags (Global context)
-    const [availableMonths, tags] = await Promise.all([
+    // 1. Fetch available months, labels, and categories (Global context).
+    const [availableMonths, tags, categories] = await Promise.all([
         getAvailableMonthsList(),
-        getTags()
+        getTags(),
+        getCategories(),
     ])
 
     // 2. Determine initial selection
@@ -49,6 +51,11 @@ export default async function TransactionsPage({ searchParams }: Props) {
                         initialTransactions={transactionData.transactions}
                         initialSummary={transactionData.summary}
                         initialTags={tags}
+                        initialCategories={categories.map(c => ({
+                            id: c.id,
+                            name: c.name,
+                            parent_id: c.parent_id,
+                        }))}
                         availableMonths={availableMonths}
                         availableStatements={availableStatements}
                         selectedMonth={selectedMonth}

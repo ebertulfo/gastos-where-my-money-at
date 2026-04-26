@@ -10,11 +10,14 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select'
-import type { Insights, InsightsPeriod } from '@/lib/types/insights'
+import type { Insights, InsightsPeriod, InsightsTravelMode } from '@/lib/types/insights'
+import type { Tag } from '@/lib/supabase/database.types'
+import type { CategoryOption } from '@/components/category-picker'
+import { CategoryDetailDialog } from '@/components/category-detail-dialog'
 import { cn, formatCurrency } from '@/lib/utils'
 import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 
 const STORAGE_KEY = 'gastos.insights-last-period'
 
@@ -24,6 +27,11 @@ interface InsightsViewProps {
     availableMonths: string[]
     availableYears: string[]
     availableStatements: { id: string; label: string }[]
+    householdMembers: { id: string; name: string; color: string | null }[]
+    selectedMemberIds: string[]
+    travelMode: InsightsTravelMode
+    availableTags: Tag[]
+    availableCategories: CategoryOption[]
 }
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -40,10 +48,45 @@ export function InsightsView({
     availableMonths,
     availableYears,
     availableStatements,
+    householdMembers,
+    selectedMemberIds,
+    travelMode,
+    availableTags,
+    availableCategories,
 }: InsightsViewProps) {
+    const [drillCategory, setDrillCategory] = useState<{
+        id: string | null
+        name: string
+        amount: number
+    } | null>(null)
     const router = useRouter()
     const pathname = usePathname()
     const searchParams = useSearchParams()
+
+    const setMemberFilter = (memberIds: string[]) => {
+        const params = new URLSearchParams(searchParams.toString())
+        if (memberIds.length === 0) {
+            params.delete('members')
+        } else {
+            params.set('members', memberIds.join(','))
+        }
+        router.push(`${pathname}?${params.toString()}`)
+    }
+
+    const toggleMember = (memberId: string) => {
+        const next = selectedMemberIds.includes(memberId)
+            ? selectedMemberIds.filter(id => id !== memberId)
+            : [...selectedMemberIds, memberId]
+        setMemberFilter(next)
+    }
+
+    const setTravelMode = (mode: InsightsTravelMode) => {
+        const params = new URLSearchParams(searchParams.toString())
+        if (mode === 'all') params.delete('travel')
+        else if (mode === 'travel') params.set('travel', 'only')
+        else params.set('travel', 'exclude')
+        router.push(`${pathname}?${params.toString()}`)
+    }
 
     // Persist the latest selection so repeat visitors land on the same view.
     useEffect(() => {
@@ -93,7 +136,7 @@ export function InsightsView({
             <div className="flex items-center justify-between mb-8 gap-4 flex-wrap">
                 <h1 className="text-2xl font-bold">Insights</h1>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                     <div className="inline-flex rounded-md border bg-background p-0.5">
                         {(['statement', 'month', 'year'] as const).map(type => (
                             <Button
@@ -104,6 +147,23 @@ export function InsightsView({
                                 onClick={() => togglePeriodType(type)}
                             >
                                 {type}
+                            </Button>
+                        ))}
+                    </div>
+
+                    <div className="inline-flex rounded-md border bg-background p-0.5">
+                        {([
+                            { mode: 'all' as const, label: 'All' },
+                            { mode: 'travel' as const, label: 'Travel only' },
+                            { mode: 'no-travel' as const, label: 'No travel' },
+                        ]).map(({ mode, label }) => (
+                            <Button
+                                key={mode}
+                                variant={travelMode === mode ? 'default' : 'ghost'}
+                                size="sm"
+                                onClick={() => setTravelMode(mode)}
+                            >
+                                {label}
                             </Button>
                         ))}
                     </div>
@@ -149,6 +209,12 @@ export function InsightsView({
                 </div>
             </div>
 
+            {/* Member filter chips hidden until per-row attribution lands. The
+                statement-level filter only catches solo statements, which is
+                rarely what the user actually wants when they ask "what did
+                Edrian spend this month?". Re-introduce when transactions get
+                an explicit `member_id` (or split-amount). */}
+
             <Card className="mb-6 animate-fade-in">
                 <CardContent className="p-6">
                     <p className="text-sm text-muted-foreground">{insights.periodLabel}</p>
@@ -159,23 +225,42 @@ export function InsightsView({
                         {insights.transactionCount} {insights.transactionCount === 1 ? 'transaction' : 'transactions'}
                         {insights.statementCount > 0 && ` across ${insights.statementCount} ${insights.statementCount === 1 ? 'statement' : 'statements'}`}
                     </p>
+                    {insights.aiCategorizedCount > 0 && (
+                        <p className="text-xs text-muted-foreground mt-2">
+                            {Math.round((insights.aiCategorizedCount / Math.max(insights.transactionCount, 1)) * 100)}% auto-categorized — review on Transactions
+                        </p>
+                    )}
+                    {insights.travelTransactionCount > 0 && travelMode === 'all' && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                            ✈ Travel: {formatCurrency(insights.travelSpent, insights.currency)} across {insights.travelTransactionCount} {insights.travelTransactionCount === 1 ? 'transaction' : 'transactions'}
+                        </p>
+                    )}
                 </CardContent>
             </Card>
 
             {insights.transactionCount === 0 ? (
                 <EmptyPeriodCard period={period} />
             ) : (
-                <div className="grid gap-6 md:grid-cols-2 animate-slide-up">
+                <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 animate-slide-up">
                     <Card>
                         <CardHeader>
-                            <CardTitle className="text-base">By tag</CardTitle>
+                            <CardTitle className="text-base">By category</CardTitle>
                         </CardHeader>
                         <CardContent className="space-y-3">
                             {insights.tagBreakdown.length === 0 ? (
-                                <p className="text-sm text-muted-foreground">No tagged transactions in this period.</p>
+                                <p className="text-sm text-muted-foreground">No categorized transactions in this period.</p>
                             ) : (
                                 insights.tagBreakdown.map(row => (
-                                    <div key={row.tagId ?? 'untagged'} className="space-y-1">
+                                    <button
+                                        type="button"
+                                        key={row.tagId ?? 'untagged'}
+                                        className="-mx-2 block w-[calc(100%+1rem)] space-y-1 rounded px-2 py-1 text-left transition-colors hover:bg-muted/50"
+                                        onClick={() => setDrillCategory({
+                                            id: row.tagId,
+                                            name: row.tagName,
+                                            amount: row.amount,
+                                        })}
+                                    >
                                         <div className="flex justify-between text-sm">
                                             <span className="flex items-center gap-2">
                                                 <span
@@ -191,8 +276,52 @@ export function InsightsView({
                                             </span>
                                         </div>
                                         <Progress value={row.percentage} className="h-1.5" />
-                                    </div>
+                                    </button>
                                 ))
+                            )}
+                        </CardContent>
+                    </Card>
+
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="text-base">By person</CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                            {insights.memberBreakdown.length === 0 ? (
+                                <p className="text-sm text-muted-foreground">
+                                    {householdMembers.length === 0
+                                        ? 'No household members yet. Add some on the upload page.'
+                                        : 'No member attributed to this period’s statements. Pick a member when uploading future statements.'}
+                                </p>
+                            ) : (
+                                insights.memberBreakdown.map(row => {
+                                    const pct = insights.totalSpent > 0
+                                        ? (row.amount / insights.totalSpent) * 100
+                                        : 0
+                                    return (
+                                        <div key={row.memberId} className="space-y-1">
+                                            <div className="flex justify-between text-sm">
+                                                <span className="flex items-center gap-2">
+                                                    <span
+                                                        className={cn('inline-block h-2 w-2 rounded-full', !row.memberColor && 'bg-muted')}
+                                                        style={row.memberColor ? { backgroundColor: row.memberColor } : undefined}
+                                                    />
+                                                    <span className="font-medium">{row.memberName}</span>
+                                                    <span className="text-xs text-muted-foreground">({row.count})</span>
+                                                </span>
+                                                <span className="font-mono text-muted-foreground">
+                                                    {formatCurrency(row.amount, insights.currency)}
+                                                </span>
+                                            </div>
+                                            {row.jointAmount > 0 && (
+                                                <p className="text-xs text-muted-foreground">
+                                                    incl. {formatCurrency(row.jointAmount, insights.currency)} joint
+                                                </p>
+                                            )}
+                                            <Progress value={pct} className="h-1.5" />
+                                        </div>
+                                    )
+                                })
                             )}
                         </CardContent>
                     </Card>
@@ -220,6 +349,21 @@ export function InsightsView({
                         </CardContent>
                     </Card>
                 </div>
+            )}
+
+            {drillCategory && (
+                <CategoryDetailDialog
+                    open={Boolean(drillCategory)}
+                    onOpenChange={(o) => { if (!o) setDrillCategory(null) }}
+                    rollupCategoryId={drillCategory.id}
+                    rollupName={drillCategory.name}
+                    rollupAmount={drillCategory.amount}
+                    currency={insights.currency}
+                    period={period}
+                    filters={{ memberIds: selectedMemberIds, travelMode }}
+                    availableTags={availableTags}
+                    availableCategories={availableCategories}
+                />
             )}
         </div>
     )

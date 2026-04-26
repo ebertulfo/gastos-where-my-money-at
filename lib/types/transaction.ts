@@ -1,3 +1,11 @@
+export interface TransactionCategory {
+    id: string
+    name: string
+    /** Top-level parent name when this is a sub-category. Drives the rollup display "Food / Groceries". */
+    parentName: string | null
+    color: string | null
+}
+
 export interface Transaction {
     id: string
     date: string
@@ -10,6 +18,13 @@ export interface Transaction {
     statementId: string
     isExcluded: boolean
     exclusionReason?: string
+    /** The single category bucket (where the money went). null = uncategorized. */
+    category: TransactionCategory | null
+    /** 'user' = user picked / confirmed; 'ai' = auto-applied at ingest, awaiting confirmation. */
+    categorySource: 'user' | 'ai' | null
+    /** Foreign-currency / overseas-spend flag. Future: groups into named trips. */
+    isTravel: boolean
+    /** Free-form labels (formerly tags). User-driven, multi-select. */
     tags: { id: string; name: string; color: string | null }[]
     createdAt: string
 }

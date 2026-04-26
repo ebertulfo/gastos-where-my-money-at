@@ -17,8 +17,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select'
-import { cn } from '@/lib/utils'
-import { Check, Loader2, PartyPopper } from 'lucide-react'
+import { Loader2, PartyPopper } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import * as React from 'react'
 
@@ -36,7 +35,7 @@ const COUNTRIES = [
     { code: 'JP', name: 'Japan', currency: 'JPY', flag: '🇯🇵' },
 ]
 
-type Step = 'welcome' | 'region' | 'tags' | 'success'
+type Step = 'welcome' | 'region' | 'success'
 
 interface OnboardingWizardProps {
     open: boolean
@@ -47,7 +46,6 @@ export function OnboardingWizard({ open, onFinish }: OnboardingWizardProps) {
     const router = useRouter()
     const [step, setStep] = React.useState<Step>('welcome')
     const [selectedCountry, setSelectedCountry] = React.useState<string>('SG')
-    const [useDefaultTags, setUseDefaultTags] = React.useState(true)
     const [isSubmitting, setIsSubmitting] = React.useState(false)
 
     // Derived currency
@@ -55,7 +53,6 @@ export function OnboardingWizard({ open, onFinish }: OnboardingWizardProps) {
 
     const handleNext = () => {
         if (step === 'welcome') setStep('region')
-        else if (step === 'region') setStep('tags')
     }
 
     const handleComplete = async () => {
@@ -64,13 +61,10 @@ export function OnboardingWizard({ open, onFinish }: OnboardingWizardProps) {
             await completeOnboarding({
                 currency,
                 country: selectedCountry,
-                useDefaultTags
             })
             setStep('success')
-            // Don't auto-close yet, let them read success message
         } catch (error) {
             console.error('Onboarding failed', error)
-            // Ideally show toast
             setIsSubmitting(false)
         }
     }
@@ -106,7 +100,9 @@ export function OnboardingWizard({ open, onFinish }: OnboardingWizardProps) {
                         <DialogHeader>
                             <DialogTitle>Where are you based?</DialogTitle>
                             <DialogDescription>
-                                We'll set your primary currency based on your region.
+                                We'll set your primary currency and seed local
+                                spending categories that match merchants you'll
+                                actually see on statements.
                             </DialogDescription>
                         </DialogHeader>
                         <div className="py-6">
@@ -124,55 +120,6 @@ export function OnboardingWizard({ open, onFinish }: OnboardingWizardProps) {
                                 </SelectContent>
                             </Select>
                         </div>
-                        <DialogFooter>
-                            <Button className="w-full" onClick={handleNext}>Next</Button>
-                        </DialogFooter>
-                    </>
-                )}
-
-                {step === 'tags' && (
-                    <>
-                        <DialogHeader>
-                            <DialogTitle>Organize your spending</DialogTitle>
-                            <DialogDescription>
-                                We can set up a standard list of categories for you (Food, Transport, Utilities, etc.)
-                            </DialogDescription>
-                        </DialogHeader>
-
-                        <div className="py-6 space-y-4">
-                            <div
-                                className={cn(
-                                    "border rounded-lg p-4 cursor-pointer transition-colors relative",
-                                    useDefaultTags ? "border-primary bg-primary/5" : "hover:bg-muted"
-                                )}
-                                onClick={() => setUseDefaultTags(true)}
-                            >
-                                <div className="flex items-center justify-between mb-2">
-                                    <div className="font-semibold">Use Recommended Tags</div>
-                                    {useDefaultTags && <Check className="h-5 w-5 text-primary" />}
-                                </div>
-                                <p className="text-sm text-muted-foreground">
-                                    Start with a comprehensive list of common expense categories. You can edit them later.
-                                </p>
-                            </div>
-
-                            <div
-                                className={cn(
-                                    "border rounded-lg p-4 cursor-pointer transition-colors relative",
-                                    !useDefaultTags ? "border-primary bg-primary/5" : "hover:bg-muted"
-                                )}
-                                onClick={() => setUseDefaultTags(false)}
-                            >
-                                <div className="flex items-center justify-between mb-2">
-                                    <div className="font-semibold">Start from Scratch</div>
-                                    {!useDefaultTags && <Check className="h-5 w-5 text-primary" />}
-                                </div>
-                                <p className="text-sm text-muted-foreground">
-                                    Create your own tags as you go. Best for power users.
-                                </p>
-                            </div>
-                        </div>
-
                         <DialogFooter>
                             <Button className="w-full" onClick={handleComplete} disabled={isSubmitting}>
                                 {isSubmitting ? (

@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import { createServerClient } from '@/lib/supabase/client';
 import { generateTransactionIdentifier, normalizeDateToYyyyMmDd } from '@/lib/transaction-identifier';
+import { autoApplyCategoriesBatch, llmFallbackForUncategorizedImports } from '@/lib/suggest/auto-apply';
 import { Database } from '@/lib/supabase/database.types';
 
 type StatementInsert = Database['public']['Tables']['statements']['Insert'];
@@ -276,15 +277,30 @@ export async function ingestStatement({
   }
 
   console.log('Inserting imports, count:', importRows.length);
-  // Batch insert
-  const { error: importError } = await (supabase as any)
+  // Batch insert + capture ids for auto-apply.
+  const { data: insertedImports, error: importError } = await (supabase as any)
     .from('transaction_imports')
-    .insert(importRows);
+    .insert(importRows)
+    .select('id');
 
   if (importError) {
     // If imports fail, cleanup the statement so the user can retry
     await (supabase as any).from('statements').delete().eq('id', statement.id);
     throw new Error(`Failed to import transactions: ${importError.message}`);
+  }
+
+  const insertedIds = ((insertedImports ?? []) as { id: string }[]).map(r => r.id);
+
+  // 5. Auto-apply: free signals first (KNN + tag-embed, ~3s for 200 rows),
+  // then LLM for the cold tail. Both sync so the review screen shows the
+  // FINAL categorization — that's where the user verifies before commit,
+  // so a partial preview is worse than waiting another 10-30s here.
+  // Budget gates the LLM; partial output is fine.
+  if (insertedIds.length > 0) {
+    await autoApplyCategoriesBatch(supabase, userId, insertedIds);
+    await llmFallbackForUncategorizedImports(supabase, userId, statement.id, {
+      onlyImportIds: insertedIds,
+    });
   }
 
   // Update status to imported/parsed so it shows up in review

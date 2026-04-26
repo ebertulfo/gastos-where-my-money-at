@@ -1,6 +1,7 @@
 'use client'
 
 import { TransactionTable } from '@/components/transaction-table'
+import type { CategoryOption } from '@/components/category-picker'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import {
@@ -26,6 +27,7 @@ interface TransactionsViewProps {
     initialTransactions: Transaction[]
     initialSummary: MonthSummary
     initialTags: Tag[]
+    initialCategories: CategoryOption[]
     availableMonths: string[]
     availableStatements: { id: string; label: string }[]
     selectedMonth: string | null
@@ -41,6 +43,7 @@ export function TransactionsView({
     initialTransactions,
     initialSummary,
     initialTags,
+    initialCategories,
     availableMonths,
     availableStatements,
     selectedMonth
@@ -123,6 +126,26 @@ export function TransactionsView({
         }
     }
 
+    const [isRecategorizing, setIsRecategorizing] = useState(false)
+    const handleRecategorize = async () => {
+        setIsRecategorizing(true)
+        try {
+            const { recategorizeUncategorized } = await import('@/app/actions/categories')
+            const result = await recategorizeUncategorized()
+            if (result.budgetExhausted) {
+                toast.warning(`Categorized ${result.categorized}/${result.attempted} — AI budget hit. Increase budget in settings to finish.`)
+            } else {
+                toast.success(`Categorized ${result.categorized} of ${result.attempted} uncategorized rows.`)
+            }
+            router.refresh()
+        } catch (err) {
+            console.error(err)
+            toast.error('Re-categorize failed')
+        } finally {
+            setIsRecategorizing(false)
+        }
+    }
+
     return (
         <div className="container py-8">
             {/* Header */}
@@ -132,16 +155,30 @@ export function TransactionsView({
                     <Button
                         variant="ghost"
                         size="sm"
+                        onClick={handleRecategorize}
+                        disabled={isRecategorizing}
+                        title="Run the LLM against any rows still missing a category. Use after a model / prompt upgrade or after editing categories."
+                    >
+                        {isRecategorizing ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                            <Sparkles className="h-4 w-4" />
+                        )}
+                        <span className="ml-1.5 text-xs">Categorize uncategorized</span>
+                    </Button>
+                    <Button
+                        variant="ghost"
+                        size="sm"
                         onClick={handleRefreshAI}
                         disabled={isRefreshingAI}
-                        title="Re-embed all transactions so AI suggestions reflect the latest tagging signal."
+                        title="Re-embed all transactions so AI matching reflects the latest tag signal."
                     >
                         {isRefreshingAI ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
                         ) : (
                             <Sparkles className="h-4 w-4" />
                         )}
-                        <span className="ml-1.5 text-xs">Refresh AI</span>
+                        <span className="ml-1.5 text-xs">Re-embed</span>
                     </Button>
                     {availableStatements.length > 0 && (
                         <Select
@@ -217,6 +254,7 @@ export function TransactionsView({
             <TransactionTable
                 transactions={optimisticTransactions}
                 availableTags={initialTags}
+                availableCategories={initialCategories}
                 showSource={true}
                 className="animate-slide-up"
                 emptyMessage="No transactions for this month. Upload a statement to get started."

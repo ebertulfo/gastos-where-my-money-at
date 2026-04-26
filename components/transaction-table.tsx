@@ -13,28 +13,41 @@ import type { Transaction } from '@/lib/types/transaction'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { toast } from 'sonner'
 import { TagInput } from './ui/tag-input'
+import { CategoryPicker, type CategoryOption } from './category-picker'
 
 interface TransactionTableProps {
     transactions: Transaction[]
     availableTags: Tag[]
+    /** All `kind='category'` rows for the user. Used by CategoryPicker. */
+    availableCategories?: CategoryOption[]
     showSource?: boolean
     className?: string
     emptyMessage?: string
     onTransactionUpdate?: (silent?: boolean) => void
     enableTagging?: boolean
+    /** Whether to show the singular category column. */
+    enableCategory?: boolean
     onTagChangeOverride?: (transactionId: string, newTagIds: string[]) => Promise<void>
+    /** Optional: review-screen path uses transaction_imports actions instead. */
+    onCategoryChangeOverride?: (transactionId: string, categoryId: string | null) => Promise<void>
+    onConfirmAiCategoryOverride?: (transactionId: string) => Promise<void>
 }
 
 export function TransactionTable({
     transactions,
     availableTags,
+    availableCategories = [],
     showSource = true,
     className,
     emptyMessage = 'No transactions to display.',
     onTransactionUpdate,
     enableTagging = true,
-    onTagChangeOverride
+    enableCategory = true,
+    onTagChangeOverride,
+    onCategoryChangeOverride,
+    onConfirmAiCategoryOverride,
 }: TransactionTableProps) {
     if (transactions.length === 0) {
         return (
@@ -44,8 +57,6 @@ export function TransactionTable({
         )
     }
 
-    const router = useRouter()
-
     return (
         <div className={cn('rounded-lg border', className)}>
             <Table>
@@ -53,7 +64,8 @@ export function TransactionTable({
                     <TableRow>
                         <TableHead className="w-[100px]">Date</TableHead>
                         <TableHead>Description</TableHead>
-                        {enableTagging && <TableHead>Tags</TableHead>}
+                        {enableCategory && <TableHead className="w-[180px]">Category</TableHead>}
+                        {enableTagging && <TableHead className="w-[180px]">Labels</TableHead>}
                         <TableHead className="text-right w-[120px]">Amount</TableHead>
                         {showSource && <TableHead className="w-[80px]">Source</TableHead>}
                         <TableHead className="w-[50px]"></TableHead>
@@ -67,8 +79,12 @@ export function TransactionTable({
                             showSource={showSource}
                             onUpdate={onTransactionUpdate}
                             enableTagging={enableTagging}
+                            enableCategory={enableCategory}
                             availableTags={availableTags}
+                            availableCategories={availableCategories}
                             onTagChangeOverride={onTagChangeOverride}
+                            onCategoryChangeOverride={onCategoryChangeOverride}
+                            onConfirmAiCategoryOverride={onConfirmAiCategoryOverride}
                         />
                     ))}
                 </TableBody>
@@ -90,15 +106,19 @@ import {
     TooltipProvider,
     TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { MinusCircle } from 'lucide-react'
+import { MinusCircle, Plane } from 'lucide-react'
 
 interface TransactionRowProps {
     transaction: Transaction
     showSource: boolean
     onUpdate?: (silent?: boolean) => void
     enableTagging: boolean
+    enableCategory: boolean
     availableTags: Tag[]
+    availableCategories: CategoryOption[]
     onTagChangeOverride?: (transactionId: string, newTagIds: string[]) => Promise<void>
+    onCategoryChangeOverride?: (transactionId: string, categoryId: string | null) => Promise<void>
+    onConfirmAiCategoryOverride?: (transactionId: string) => Promise<void>
 }
 
 function TransactionRow({
@@ -106,8 +126,12 @@ function TransactionRow({
     showSource,
     onUpdate,
     enableTagging,
+    enableCategory,
     availableTags,
-    onTagChangeOverride
+    availableCategories,
+    onTagChangeOverride,
+    onCategoryChangeOverride,
+    onConfirmAiCategoryOverride,
 }: TransactionRowProps) {
     const router = useRouter()
 
@@ -132,16 +156,14 @@ function TransactionRow({
         setIsExcluded(newExcludedState)
 
         if (newExcludedState) {
-            // Must provide reason? Optional.
-            // Let's open popover to allow entering a reason if they want.
             setIsPopoverOpen(true)
         } else {
-            // If turning OFF, clear reason
             setExclusionReason('')
         }
 
         try {
             await updateTransactionExclusion(transaction.id, newExcludedState, newExcludedState ? exclusionReason : undefined)
+            toast.success(newExcludedState ? 'Excluded from totals' : 'Included in totals')
 
             startTransition(() => {
                 router.refresh()
@@ -149,7 +171,7 @@ function TransactionRow({
             if (onUpdate) onUpdate(true)
         } catch (error) {
             console.error('Failed to update exclusion', error)
-            // Revert
+            toast.error('Failed to update exclusion')
             setIsExcluded(!newExcludedState)
         }
     }
@@ -163,6 +185,7 @@ function TransactionRow({
             })
         } catch (error) {
             console.error('Failed to update reason', error)
+            toast.error('Failed to update reason')
         }
     }
 
@@ -173,8 +196,13 @@ function TransactionRow({
             </TableCell>
             <TableCell className="font-medium">
                 <div className="flex flex-col">
-                    <span className={cn(isExcluded && "line-through text-muted-foreground")}>
-                        {transaction.description}
+                    <span className={cn('flex items-center gap-1.5', isExcluded && "line-through text-muted-foreground")}>
+                        <TravelToggle
+                            transactionId={transaction.id}
+                            isTravel={transaction.isTravel}
+                            onUpdate={() => onUpdate?.(true)}
+                        />
+                        <span>{transaction.description}</span>
                     </span>
                     {isExcluded && exclusionReason && (
                         <span className="text-xs text-muted-foreground italic">
@@ -183,8 +211,47 @@ function TransactionRow({
                     )}
                 </div>
             </TableCell>
+            {enableCategory && (
+                <TableCell className="w-[180px]">
+                    <CategoryPicker
+                        selectedId={transaction.category?.id ?? null}
+                        source={transaction.categorySource}
+                        categories={availableCategories}
+                        onChange={async (categoryId) => {
+                            if (onCategoryChangeOverride) {
+                                await onCategoryChangeOverride(transaction.id, categoryId)
+                                return
+                            }
+                            try {
+                                const { setTransactionCategory } = await import('@/app/actions/categories')
+                                await setTransactionCategory(transaction.id, categoryId)
+                                toast.success(categoryId ? 'Category updated' : 'Category cleared')
+                                if (onUpdate) onUpdate(true)
+                            } catch (e) {
+                                console.error('Failed to set category', e)
+                                toast.error('Failed to update category')
+                            }
+                        }}
+                        onConfirmAi={async () => {
+                            if (onConfirmAiCategoryOverride) {
+                                await onConfirmAiCategoryOverride(transaction.id)
+                                return
+                            }
+                            try {
+                                const { confirmAiCategory } = await import('@/app/actions/categories')
+                                await confirmAiCategory(transaction.id)
+                                toast.success('Category confirmed')
+                                if (onUpdate) onUpdate(true)
+                            } catch (e) {
+                                console.error('Failed to confirm AI category', e)
+                                toast.error('Failed to confirm category')
+                            }
+                        }}
+                    />
+                </TableCell>
+            )}
             {enableTagging && (
-                <TableCell className="w-[200px]">
+                <TableCell className="w-[180px]">
                     <TagInput
                         selectedTags={transaction.tags}
                         availableTags={availableTags}
@@ -197,14 +264,12 @@ function TransactionRow({
                             try {
                                 const { assignTagsToTransaction } = await import('@/app/actions/tags')
                                 await assignTagsToTransaction(transaction.id, newTagIds)
+                                toast.success('Labels updated')
                                 if (onUpdate) onUpdate(true)
                             } catch (e) {
                                 console.error("Failed to update tags", e)
+                                toast.error('Failed to update labels')
                             }
-                        }}
-                        getSuggestions={async () => {
-                            const { suggestTagsForTransactionAction } = await import('@/app/actions/suggestions')
-                            return suggestTagsForTransactionAction(transaction.id, 5)
                         }}
                     />
                 </TableCell>
@@ -284,5 +349,68 @@ function TransactionRow({
                 </Popover>
             </TableCell>
         </TableRow>
+    )
+}
+
+function TravelToggle({
+    transactionId,
+    isTravel,
+    onUpdate,
+}: {
+    transactionId: string
+    isTravel: boolean
+    onUpdate?: () => void
+}) {
+    const router = useRouter()
+    const [optimistic, setOptimistic] = useState(isTravel)
+    const [busy, setBusy] = useState(false)
+
+    useEffect(() => setOptimistic(isTravel), [isTravel])
+
+    const handleToggle = async (e: { stopPropagation: () => void }) => {
+        e.stopPropagation()
+        if (busy) return
+        const next = !optimistic
+        setOptimistic(next)
+        setBusy(true)
+        try {
+            const { setTransactionTravel } = await import('@/app/actions/transactions')
+            await setTransactionTravel(transactionId, next)
+            toast.success(next ? 'Marked as travel' : 'Removed travel mark')
+            router.refresh()
+            onUpdate?.()
+        } catch (err) {
+            console.error('Failed to toggle travel', err)
+            toast.error('Failed to update travel')
+            setOptimistic(!next)
+        } finally {
+            setBusy(false)
+        }
+    }
+
+    return (
+        <TooltipProvider>
+            <Tooltip>
+                <TooltipTrigger asChild>
+                    <button
+                        type="button"
+                        onClick={handleToggle}
+                        disabled={busy}
+                        aria-label={optimistic ? 'Mark as non-travel' : 'Mark as travel'}
+                        className={cn(
+                            'inline-flex h-5 w-5 shrink-0 items-center justify-center rounded transition-colors',
+                            optimistic
+                                ? 'text-primary hover:bg-primary/10'
+                                : 'text-muted-foreground/30 hover:text-muted-foreground hover:bg-muted',
+                        )}
+                    >
+                        <Plane className="h-3.5 w-3.5" />
+                    </button>
+                </TooltipTrigger>
+                <TooltipContent>
+                    <p>{optimistic ? 'Travel spend — click to unmark' : 'Mark as travel'}</p>
+                </TooltipContent>
+            </Tooltip>
+        </TooltipProvider>
     )
 }
