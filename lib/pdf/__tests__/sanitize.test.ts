@@ -48,7 +48,7 @@ describe("sanitizeDescription", () => {
     });
   });
 
-  describe("long digit sequences (9+ digits)", () => {
+  describe("long digit sequences (8+ digits)", () => {
     it("masks 9-digit sequences", () => {
       expect(sanitizeDescription("REF 123456789 COMPLETE")).toBe(
         "REF <digits_redacted> COMPLETE"
@@ -61,8 +61,118 @@ describe("sanitizeDescription", () => {
       );
     });
 
-    it("does not mask 8-digit sequences", () => {
-      expect(sanitizeDescription("REF 12345678 DONE")).toBe("REF 12345678 DONE");
+    it("masks 8-digit sequences (catches SG mobiles + ATM transaction refs)", () => {
+      expect(sanitizeDescription("REF 12345678 DONE")).toBe(
+        "REF <digits_redacted> DONE"
+      );
+    });
+
+    it("masks bare 8-digit ATM transaction refs", () => {
+      expect(sanitizeDescription("PLUS ATM Transaction 67215799,LOCATION")).toBe(
+        "PLUS ATM Transaction <digits_redacted>,LOCATION"
+      );
+    });
+
+    it("does not mask 7-digit sequences (still permits short codes)", () => {
+      expect(sanitizeDescription("REF 1234567 DONE")).toBe("REF 1234567 DONE");
+    });
+  });
+
+  describe("person recipient on transfer rails", () => {
+    it("masks recipient on PAYNOW TO", () => {
+      expect(sanitizeDescription("PAYNOW TO ALICE SMITH")).toBe(
+        "PAYNOW TO <name_redacted>"
+      );
+    });
+
+    it("masks sender on BT TRANSFER FROM", () => {
+      expect(sanitizeDescription("BT TRANSFER FROM JOHN DOE 123")).toBe(
+        "BT TRANSFER FROM <name_redacted>"
+      );
+    });
+
+    it("masks recipient on FUND TRANSFER TO", () => {
+      expect(sanitizeDescription("FUND TRANSFER TO ALICE SMITH REF1234")).toBe(
+        "FUND TRANSFER TO <name_redacted>"
+      );
+    });
+
+    it("masks recipient on BT TRF TO", () => {
+      expect(sanitizeDescription("BT TRF TO ALICE SMITH")).toBe(
+        "BT TRF TO <name_redacted>"
+      );
+    });
+
+    it("masks recipient on FAST TO", () => {
+      expect(sanitizeDescription("FAST TO ALICE SMITH")).toBe(
+        "FAST TO <name_redacted>"
+      );
+    });
+
+    it("masks recipient on FAST TRANSFER FROM", () => {
+      expect(sanitizeDescription("FAST TRANSFER FROM JOHN DOE")).toBe(
+        "FAST TRANSFER FROM <name_redacted>"
+      );
+    });
+
+    it("does NOT mask GIRO recipients (corporate, kept for tagging signal)", () => {
+      expect(sanitizeDescription("GIRO PAYMENT HSBC LIFE INSURANCE")).toBe(
+        "GIRO PAYMENT HSBC LIFE INSURANCE"
+      );
+    });
+
+    it("does NOT mask plain TO/FROM in merchant text", () => {
+      expect(sanitizeDescription("TOM N TOMS AIRPORT")).toBe(
+        "TOM N TOMS AIRPORT"
+      );
+    });
+
+    it("does NOT mask the rail keyword alone (no recipient)", () => {
+      expect(sanitizeDescription("PAYNOW TO")).toBe("PAYNOW TO");
+    });
+  });
+
+  describe("HDB / condo unit refs", () => {
+    it("masks #XX-XX patterns", () => {
+      expect(sanitizeDescription("STARBUCKS BLK 123 #03-15")).toBe(
+        "STARBUCKS BLK 123 <unit_redacted>"
+      );
+    });
+
+    it("masks #XX-XXX patterns", () => {
+      expect(sanitizeDescription("MERCHANT #12-345")).toBe(
+        "MERCHANT <unit_redacted>"
+      );
+    });
+
+    it("masks unit refs with en-dash", () => {
+      expect(sanitizeDescription("SHOP #03–15 LEVEL 3")).toBe(
+        "SHOP <unit_redacted> LEVEL 3"
+      );
+    });
+
+    it("does not mask plain hashtag with too few digits", () => {
+      expect(sanitizeDescription("STARBUCKS #5678")).toBe("STARBUCKS #5678");
+    });
+  });
+
+  describe("Singapore postal codes near street keywords", () => {
+    it("masks 6-digit postal after SINGAPORE", () => {
+      expect(sanitizeDescription("MERCHANT SINGAPORE 049315")).toBe(
+        "MERCHANT SINGAPORE <postal_redacted>"
+      );
+    });
+
+    it("masks 6-digit postal after BLOCK", () => {
+      expect(sanitizeDescription("FOOD CENTRE BLOCK 511025")).toBe(
+        "FOOD CENTRE BLOCK <postal_redacted>"
+      );
+    });
+
+    it("does not mask standalone 6-digit codes (insufficient context)", () => {
+      expect(sanitizeDescription("MERCHANT 049315 OK")).toBe(
+        "MERCHANT 049315 OK"
+      );
     });
   });
 

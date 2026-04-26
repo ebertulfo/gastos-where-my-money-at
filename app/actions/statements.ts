@@ -25,7 +25,6 @@ function mapDBStatementToUI(s: DBStatement, transactionCount = 0): UIStatement {
   return {
     id: s.id,
     bankName,
-    accountLabel: s.account_name || undefined,
     periodStart: s.period_start,
     periodEnd: s.period_end,
     currency: s.currency || 'SGD',

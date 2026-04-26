@@ -50,11 +50,17 @@ export type ParseResponse = ParseSuccessResponse | ParseErrorResponse;
 /**
  * Sanitizes a transaction description by masking potentially sensitive patterns.
  *
- * Masks:
- * - Card-number-like sequences (16 digits, possibly with spaces/dashes) → `<card_redacted>`
- * - Segmented account numbers (e.g., 123-456-789)                        → `<account_redacted>`
- * - Long digit sequences (9+ digits)                                     → `<digits_redacted>`
- * - Long alphanumeric reference IDs (10+ chars with BOTH letters AND digits) → `<ref_id_redacted>`
+ * Masks (in order):
+ * - Card-number-like sequences (16 digits)                                → `<card_redacted>`
+ * - Segmented account numbers (e.g., 123-456-789)                         → `<account_redacted>`
+ * - Person recipient after person-to-person transfer rails                → `<name_redacted>`
+ *   (PayNow, BT, FUND TRANSFER, FAST). Corporate rails like GIRO are kept
+ *   so tagging signal isn't lost on bill payments.
+ * - HDB / condo unit references like `#XX-XX`                             → `<unit_redacted>`
+ * - 6-digit Singapore postal codes adjacent to street keywords            → `<postal_redacted>`
+ * - 8+ digit numeric sequences (catches SG mobiles + 8-digit transaction
+ *   refs that escaped older 9+ rule)                                       → `<digits_redacted>`
+ * - Long alphanumeric reference IDs (10+ chars, must contain letters + digits) → `<ref_id_redacted>`
  *
  * All redactions use the `<type_redacted>` convention so the mask clearly
  * says what kind of data was removed without leaking any of it.
@@ -68,8 +74,27 @@ export function sanitizeDescription(desc: string): string {
     .replace(/\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b/g, "<card_redacted>")
     // Segmented account-number-like sequences: 123-456-789
     .replace(/\b\d{3,}(-\d{3,})+\b/g, "<account_redacted>")
-    // Long digit sequences (9+ digits)
-    .replace(/\b\d{9,}\b/g, "<digits_redacted>")
+    // Person recipient on person-to-person rails. The recipient/sender
+    // field is always at the end of the line; corporate bill rails (GIRO,
+    // MEPS, IBG) are deliberately not included here so merchant signal
+    // survives for tagging.
+    .replace(
+      /\b(PAYNOW (?:TO|FROM)|BT (?:TRANSFER|TRF) (?:TO|FROM)|FUND TRANSFER (?:TO|FROM)|FAST (?:TRANSFER )?(?:TO|FROM))\b\s+.+$/gi,
+      "$1 <name_redacted>"
+    )
+    // HDB/condo unit refs: #XX-XX or #XX-XXX (also accepts en-dash)
+    .replace(/#\d{2}[-–]\d{2,4}\b/g, "<unit_redacted>")
+    // SG postal codes (6 digits) adjacent to street/locality keywords.
+    // Conservative: only fires near street words to avoid masking legit
+    // 6-digit reference codes inside merchant text.
+    .replace(
+      /\b(SINGAPORE|SGP|ROAD|RD|AVENUE|AVE|STREET|ST|BLOCK|BLK|DRIVE|DR|LANE|LN)\s+(\d{6})\b/gi,
+      "$1 <postal_redacted>"
+    )
+    // 8+ digit number sequences. Lowered from 9+ after empirical signal
+    // showed 8-digit transaction refs and SG mobile numbers (8 digits, no
+    // country prefix) escaping the old rule.
+    .replace(/\b\d{8,}\b/g, "<digits_redacted>")
     // Long alphanumeric reference IDs: must contain BOTH letters AND digits, 10+ chars
     // This avoids matching pure words like "MYREPUBLIC" or "STARBUCKS"
     .replace(/\b(?=[A-Z0-9]*[0-9])(?=[A-Z0-9]*[A-Z])[A-Z0-9]{10,}\b/g, "<ref_id_redacted>");

@@ -176,9 +176,8 @@ export async function POST(request: Request) {
       metadata: {
         periodStart,
         periodEnd,
-        // Optional metadata
+        // bank inferred from filename inside ingestStatement when undefined.
         bank: undefined,
-        accountName: undefined,
       },
       userId: user.id,
     });

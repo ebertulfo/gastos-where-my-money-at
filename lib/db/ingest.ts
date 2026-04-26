@@ -12,6 +12,8 @@ type TransactionRow = {
   balance?: number;
 };
 
+type StatementTypeValue = 'debit' | 'credit' | 'investment';
+
 interface IngestOptions {
   fileName: string;
   fileBuffer: Buffer;
@@ -19,11 +21,60 @@ interface IngestOptions {
   metadata: {
     periodStart?: string;
     periodEnd?: string;
-    accountName?: string;
     bank?: string;
     currency?: string;
   };
   userId: string;
+}
+
+// Best-effort bank slug from the original filename. Used only inside the
+// redacted source_file_name; never round-tripped to display. Falls back to
+// 'unknown' rather than guessing wildly. Order matters: longer/more specific
+// tokens first so "dbs_posb" wins over "dbs".
+const BANK_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/dbs[\s_-]*posb/i, 'dbs_posb'],
+  [/standard[\s_-]*chartered|stan[\s_-]*chart/i, 'stanchart'],
+  [/maybank/i, 'maybank'],
+  [/citi(bank)?/i, 'citi'],
+  [/hsbc/i, 'hsbc'],
+  [/posb/i, 'posb'],
+  [/ocbc/i, 'ocbc'],
+  [/uob/i, 'uob'],
+  [/dbs/i, 'dbs'],
+];
+
+function detectBankSlug(originalFileName: string): string {
+  for (const [re, slug] of BANK_PATTERNS) {
+    if (re.test(originalFileName)) return slug;
+  }
+  return 'unknown';
+}
+
+function detectStatementType(originalFileName: string): StatementTypeValue {
+  if (/investment/i.test(originalFileName)) return 'investment';
+  if (/credit/i.test(originalFileName)) return 'credit';
+  return 'debit';
+}
+
+// {hash8}-{type}-{bank}-{MM-YYYY}.pdf — strips the original filename which
+// often contains the user's real name (e.g. "DBS_POSB_JaneDoe_Dec2025.pdf").
+function redactFileName(
+  fileHash: string,
+  type: StatementTypeValue,
+  bankSlug: string,
+  periodStart: string | undefined,
+): string {
+  const hash8 = fileHash.slice(0, 8);
+  let mmYyyy = 'unknown';
+  if (periodStart) {
+    const d = new Date(periodStart);
+    if (!isNaN(d.getTime())) {
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const yyyy = String(d.getFullYear());
+      mmYyyy = `${mm}-${yyyy}`;
+    }
+  }
+  return `${hash8}-${type}-${bankSlug}-${mmYyyy}.pdf`;
 }
 
 export async function ingestStatement({
@@ -63,18 +114,24 @@ export async function ingestStatement({
       throw new Error("Statement period start and end are required.");
   }
 
-  // 3. Create Statement Record
+  // 3. Privacy strip — derive type/bank from the original filename, then
+  // replace it with a redacted form before persisting. account_name is
+  // never stored.
+  const statementType = detectStatementType(fileName);
+  const bankSlug = metadata.bank ? metadata.bank.toLowerCase().replace(/\s+/g, '_') : detectBankSlug(fileName);
+  const redactedFileName = redactFileName(fileHash, statementType, bankSlug, metadata.periodStart);
+
+  // 4. Create Statement Record
   const statementData: StatementInsert = {
-    source_file_name: fileName,
+    source_file_name: redactedFileName,
     source_file_sha256: fileHash,
     uploaded_by: userId,
     period_start: metadata.periodStart,
     period_end: metadata.periodEnd,
-    bank: metadata.bank || null,
-    account_name: metadata.accountName || null,
-    currency: metadata.currency || 'SGD', // Default to SGD for now
+    bank: metadata.bank || (bankSlug !== 'unknown' ? bankSlug : null),
+    currency: metadata.currency || 'SGD',
     status: 'ingesting',
-    statement_type: 'bank', // Default, logic to detect type can be added later
+    statement_type: statementType,
   };
 
   const { data, error: statementError } = await (supabase as any)

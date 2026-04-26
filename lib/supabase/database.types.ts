@@ -37,7 +37,6 @@ export type Database = {
       statements: {
         Row: {
           account_last4: string | null
-          account_name: string | null
           bank: string | null
           created_at: string
           currency: string
@@ -55,7 +54,6 @@ export type Database = {
         }
         Insert: {
           account_last4?: string | null
-          account_name?: string | null
           bank?: string | null
           created_at?: string
           currency?: string
@@ -73,7 +71,6 @@ export type Database = {
         }
         Update: {
           account_last4?: string | null
-          account_name?: string | null
           bank?: string | null
           created_at?: string
           currency?: string
@@ -378,7 +375,7 @@ export type Database = {
     Enums: {
       import_resolution: "pending" | "accepted" | "rejected"
       statement_status: "parsed" | "ingesting" | "ingested" | "failed"
-      statement_type: "bank" | "credit_card"
+      statement_type: "debit" | "credit" | "investment"
       transaction_status: "active" | "voided"
     }
     CompositeTypes: {
@@ -512,7 +509,7 @@ export const Constants = {
     Enums: {
       import_resolution: ["pending", "accepted", "rejected"],
       statement_status: ["parsed", "ingesting", "ingested", "failed"],
-      statement_type: ["bank", "credit_card"],
+      statement_type: ["debit", "credit", "investment"],
       transaction_status: ["active", "voided"],
     },
   },
