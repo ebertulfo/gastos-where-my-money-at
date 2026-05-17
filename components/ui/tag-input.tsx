@@ -20,7 +20,7 @@ import {
     PopoverTrigger,
 } from "@/components/ui/popover"
 import { TagEditDialog } from "@/components/ui/tag-edit-dialog"
-import { Tag } from "@/lib/supabase/database.types"
+import type { Tag } from "@/db/schema"
 import type { TagSuggestion } from "@/lib/suggest/types"
 import { cn } from "@/lib/utils"
 

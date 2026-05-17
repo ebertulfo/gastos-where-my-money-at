@@ -3,7 +3,7 @@
 import { getTransactions, getMonthSummary } from './transactions'
 import { getTags } from './tags'
 import { Transaction, MonthSummary } from '@/lib/types/transaction'
-import { Tag } from '@/lib/supabase/database.types'
+import type { Tag } from '@/db/schema'
 
 export interface TransactionData {
   transactions: Transaction[]

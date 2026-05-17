@@ -1,46 +1,47 @@
 'use server'
 
 import { after } from 'next/server'
-import { revalidatePath } from 'next/cache'
+import { revalidatePath, revalidateTag, unstable_cache } from 'next/cache'
+import { and, asc, eq, inArray } from 'drizzle-orm'
 
-import { Tag } from '@/lib/supabase/database.types'
-import { createClient } from '@/lib/supabase/server'
+import { db } from '@/lib/db'
+import { tags, transactionTags, type Tag } from '@/db/schema'
+import { requireUserId } from '@/lib/auth'
+import { tag as cacheTag } from '@/lib/cache/tags'
 import { embedTags } from '@/lib/suggest/embed'
 import { seedTagDescriptionViaLLM } from '@/lib/suggest/seed-tag-description'
 
 // Tag changes ripple into the transactions list, the insights aggregations,
 // the recent-imports / onboarding gate on /upload, and any statement detail
 // page that renders tagged transactions.
-function revalidateTagSurfaces() {
+function revalidateTagSurfaces(userId?: string) {
     revalidatePath('/transactions')
     revalidatePath('/insights')
     revalidatePath('/upload')
     revalidatePath('/statements/[id]', 'page')
+    if (userId) revalidateTag(cacheTag.tags(userId), 'default')
 }
 
-// Tag names are stored lowercase so "Japan" vs "japan" can't diverge and
-// the embedding space stays case-consistent with normalizeForEmbedding.
-// Enforced in the DB via tags_name_lowercase_chk; we also normalize at the
-// server-action boundary so users get a clean value back on insert without
+// Tag names are stored lowercase (DB constraint tags_name_lowercase_chk);
+// normalize at the action boundary so users get a clean value back without
 // round-tripping a constraint error.
 function normalizeTagName(name: string): string {
     return name.trim().toLowerCase()
 }
 
-export async function getTags() {
-    const supabase = await createClient()
-    const { data: tags, error } = await supabase
-        .from('tags')
-        .select('*')
-        .eq('kind', 'label')
-        .order('name')
-
-    if (error) {
-        console.error('Error fetching tags:', error)
-        return []
-    }
-
-    return tags as Tag[]
+export async function getTags(): Promise<Tag[]> {
+    const userId = await requireUserId()
+    return unstable_cache(
+        async () => {
+            return db
+                .select()
+                .from(tags)
+                .where(and(eq(tags.userId, userId), eq(tags.kind, 'label')))
+                .orderBy(asc(tags.name))
+        },
+        ['user-tags', userId],
+        { tags: [cacheTag.tags(userId)], revalidate: 3600 },
+    )()
 }
 
 export type CreateTagInput = {
@@ -49,220 +50,157 @@ export type CreateTagInput = {
     color?: string | null
 }
 
-export async function createTag(input: CreateTagInput) {
-    const supabase = await createClient()
-    const { data: user } = await supabase.auth.getUser()
-
-    if (!user.user) {
-        throw new Error('Unauthorized')
-    }
-
+export async function createTag(input: CreateTagInput): Promise<Tag> {
+    const userId = await requireUserId()
     const name = normalizeTagName(input.name)
 
-    const { data, error } = await supabase
-        .from('tags')
-        .insert({
+    const [tag] = await db
+        .insert(tags)
+        .values({
+            userId,
             name,
-            parent_id: input.parentId || null,
-            color: input.color || null,
-            user_id: user.user.id,
+            parentId: input.parentId ?? null,
+            color: input.color ?? null,
             kind: 'label',
-        } as any)
-        .select()
-        .single()
-
-    if (error) {
-        console.error('Error creating tag:', error)
-        throw new Error(error.message)
-    }
-
-    const tag = data as Tag
-    revalidateTagSurfaces()
-
-    // Auto-seed description via LLM, then (re-)embed. Runs after the
-    // response so tag creation stays snappy; the tag is immediately
-    // usable with an embedding of just the name, and gets upgraded to
-    // name+description within a second or two in the background.
-    after(async () => {
-        const seeded = await seedTagDescriptionViaLLM({
-            userId: user.user!.id,
-            tagName: name,
         })
+        .returning()
+
+    if (!tag) throw new Error('Failed to create tag')
+
+    revalidateTagSurfaces(userId)
+
+    // Auto-seed description via LLM, then (re-)embed. Runs after the response
+    // so tag creation stays snappy.
+    after(async () => {
+        const seeded = await seedTagDescriptionViaLLM({ userId, tagName: name })
         if (seeded) {
-            await supabase
-                .from('tags')
-                .update({ description: seeded } as any)
-                .eq('id', tag.id)
+            await db
+                .update(tags)
+                .set({ description: seeded })
+                .where(eq(tags.id, tag.id))
         }
-        await embedTags(supabase, [tag.id])
-        revalidateTagSurfaces()
+        await embedTags([tag.id])
+        revalidateTagSurfaces(userId)
     })
 
     return tag
 }
 
-export async function updateTag(id: string, input: Partial<CreateTagInput>) {
-    const supabase = await createClient()
+export async function updateTag(id: string, input: Partial<CreateTagInput>): Promise<Tag> {
+    const userId = await requireUserId()
 
-    const updates: any = {}
+    const updates: Partial<{ name: string; parentId: string | null; color: string | null }> = {}
     if (input.name !== undefined) updates.name = normalizeTagName(input.name)
-    if (input.parentId !== undefined) updates.parent_id = input.parentId
+    if (input.parentId !== undefined) updates.parentId = input.parentId
     if (input.color !== undefined) updates.color = input.color
 
-    const { data, error } = await supabase
-        .from('tags')
-        .update(updates as unknown as never)
-        .eq('id', id)
-        .select()
-        .single()
+    const [updated] = await db
+        .update(tags)
+        .set(updates)
+        .where(eq(tags.id, id))
+        .returning()
 
-    if (error) {
-        console.error('Error updating tag:', error)
-        throw new Error(error.message)
-    }
+    if (!updated) throw new Error('Tag not found')
 
-    revalidateTagSurfaces()
+    revalidateTagSurfaces(userId)
 
-    // Re-embed when the name changed (description unchanged here — use
-    // setTagDescription / generateTagDescription for that). Background-fired
-    // so the UI rerenders immediately.
     if (input.name !== undefined) {
         after(async () => {
-            await embedTags(supabase, [id])
+            await embedTags([id])
         })
     }
 
-    return data as Tag
+    return updated
 }
 
 /**
- * Persists a user-edited description and re-embeds. Used when the user
- * types their own semantic cues into the tag-management UI.
+ * Persists a user-edited description and re-embeds.
  */
-export async function setTagDescription(tagId: string, description: string | null) {
-    const supabase = await createClient()
+export async function setTagDescription(tagId: string, description: string | null): Promise<Tag> {
+    const userId = await requireUserId()
 
     const trimmed = description?.trim() || null
 
-    const { data, error } = await supabase
-        .from('tags')
-        .update({ description: trimmed } as any)
-        .eq('id', tagId)
-        .select()
-        .single()
+    const [updated] = await db
+        .update(tags)
+        .set({ description: trimmed })
+        .where(eq(tags.id, tagId))
+        .returning()
 
-    if (error) {
-        console.error('Error updating tag description:', error)
-        throw new Error(error.message)
-    }
+    if (!updated) throw new Error('Tag not found')
 
-    revalidateTagSurfaces()
+    revalidateTagSurfaces(userId)
 
     after(async () => {
-        await embedTags(supabase, [tagId])
+        await embedTags([tagId])
     })
 
-    return data as Tag
+    return updated
 }
 
 /**
- * "Refresh AI" — asks the LLM to regenerate the description based on the
- * current tag name, persists it, and re-embeds. Awaited end-to-end
- * because the user clicked a button and expects to see the new value.
+ * "Refresh AI" — asks the LLM to regenerate the description and re-embeds.
  * Returns null if the call was over budget or the API key is missing.
  */
 export async function generateTagDescription(tagId: string): Promise<Tag | null> {
-    const supabase = await createClient()
-    const { data: user } = await supabase.auth.getUser()
-    if (!user.user) throw new Error('Unauthorized')
+    const userId = await requireUserId()
 
-    const { data: tagData, error: fetchError } = await supabase
-        .from('tags')
-        .select('id, name')
-        .eq('id', tagId)
-        .maybeSingle()
+    const [tagData] = await db
+        .select({ id: tags.id, name: tags.name })
+        .from(tags)
+        .where(eq(tags.id, tagId))
+        .limit(1)
 
-    if (fetchError || !tagData) {
-        throw new Error('Tag not found')
-    }
+    if (!tagData) throw new Error('Tag not found')
 
-    const { name } = tagData as { name: string }
-
-    const seeded = await seedTagDescriptionViaLLM({
-        userId: user.user.id,
-        tagName: name,
-    })
+    const seeded = await seedTagDescriptionViaLLM({ userId, tagName: tagData.name })
     if (!seeded) return null
 
-    const { data: updated, error: updateError } = await supabase
-        .from('tags')
-        .update({ description: seeded } as any)
-        .eq('id', tagId)
-        .select()
-        .single()
+    const [updated] = await db
+        .update(tags)
+        .set({ description: seeded })
+        .where(eq(tags.id, tagId))
+        .returning()
 
-    if (updateError) {
-        throw new Error(updateError.message)
-    }
+    if (!updated) throw new Error('Tag update failed')
 
-    await embedTags(supabase, [tagId])
-    revalidateTagSurfaces()
+    await embedTags([tagId])
+    revalidateTagSurfaces(userId)
 
-    return updated as Tag
+    return updated
 }
 
-export async function deleteTag(id: string) {
-    const supabase = await createClient()
-
-    const { error } = await supabase
-        .from('tags')
-        .delete()
-        .eq('id', id)
-
-    if (error) {
-        console.error('Error deleting tag:', error)
-        throw new Error(error.message)
-    }
-
-    revalidateTagSurfaces()
+export async function deleteTag(id: string): Promise<void> {
+    const userId = await requireUserId()
+    await db.delete(tags).where(eq(tags.id, id))
+    revalidateTagSurfaces(userId)
 }
 
-export async function assignTagsToTransaction(transactionId: string, tagIds: string[]) {
-    const supabase = await createClient()
+export async function assignTagsToTransaction(
+    transactionId: string,
+    tagIds: string[],
+): Promise<void> {
+    await requireUserId()
 
-    // First delete existing tags for this transaction
-    // Note: This is a simple strategy. For more complex scenarios we might want to diff.
-    const { error: deleteError } = await supabase
-        .from('transaction_tags')
-        .delete()
-        .eq('transaction_id', transactionId)
-
-    if (deleteError) {
-        throw new Error(deleteError.message)
-    }
+    await db
+        .delete(transactionTags)
+        .where(eq(transactionTags.transactionId, transactionId))
 
     if (tagIds.length === 0) {
         revalidateTagSurfaces()
         return
     }
 
-    // Exactly one row per transaction must have is_primary=true (enforced by
-    // idx_transaction_tags_one_primary). The first tag in the input becomes
-    // primary; the rest are secondaries. The default for the column is true,
-    // so we MUST set is_primary=false explicitly on the others.
-    const { error: insertError } = await supabase
-        .from('transaction_tags')
-        .insert(
-            tagIds.map((tagId, i) => ({
-                transaction_id: transactionId,
-                tag_id: tagId,
-                is_primary: i === 0,
-            })) as any
-        )
-
-    if (insertError) {
-        throw new Error(insertError.message)
-    }
+    // Exactly one row per transaction has is_primary=true (enforced by
+    // idx_transaction_tags_one_primary). First tag in the input becomes
+    // primary; the rest are explicitly false.
+    await db.insert(transactionTags).values(
+        tagIds.map((tagId, i) => ({
+            transactionId,
+            tagId,
+            isPrimary: i === 0,
+        })),
+    )
 
     revalidateTagSurfaces()
 }

@@ -11,16 +11,16 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select'
-import { formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency } from '@/lib/utils'
 import { ChevronLeft, ChevronRight, Loader2, Sparkles } from 'lucide-react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
-import { startTransition, useOptimistic, useState } from 'react'
+import { startTransition, useOptimistic, useState, useTransition } from 'react'
 import { toast } from 'sonner'
 
 // Types
 import { backfillTransactionEmbeddings } from '@/app/actions/suggestions'
 import { assignTagsToTransaction } from '@/app/actions/tags'
-import type { Tag } from '@/lib/supabase/database.types'
+import type { Tag } from '@/db/schema'
 import type { MonthSummary, Transaction } from '@/lib/types/transaction'
 
 interface TransactionsViewProps {
@@ -51,15 +51,20 @@ export function TransactionsView({
     const router = useRouter()
     const pathname = usePathname()
     const searchParams = useSearchParams()
+    const [isNavigating, startNavTransition] = useTransition()
+
+    const navigate = (url: string) => {
+        startNavTransition(() => router.push(url))
+    }
 
     // Optimistic UI for Transactions
     // We use useOptimistic to show instantaneous updates
     const [optimisticTransactions, setOptimisticTransactions] = useOptimistic(
         initialTransactions,
         (state: Transaction[], updatedTransaction: { id: string; tags: any[] }) => {
-            return state.map(t => 
-                t.id === updatedTransaction.id 
-                    ? { ...t, tags: updatedTransaction.tags } 
+            return state.map(t =>
+                t.id === updatedTransaction.id
+                    ? { ...t, tags: updatedTransaction.tags }
                     : t
             )
         }
@@ -69,7 +74,7 @@ export function TransactionsView({
     const setSelectedMonth = (month: string) => {
         const params = new URLSearchParams(searchParams.toString())
         params.set('month', month)
-        router.push(`${pathname}?${params.toString()}`)
+        navigate(`${pathname}?${params.toString()}`)
     }
 
     const currentMonthIndex = selectedMonth ? availableMonths.indexOf(selectedMonth) : -1
@@ -190,7 +195,7 @@ export function TransactionsView({
                                 } else {
                                     params.set('statement', value)
                                 }
-                                router.push(`${pathname}?${params.toString()}`)
+                                navigate(`${pathname}?${params.toString()}`)
                             }}
                         >
                             <SelectTrigger className="w-[240px]">
@@ -222,6 +227,13 @@ export function TransactionsView({
                 </div>
             </div>
 
+            <div
+                className={cn(
+                    'transition-opacity duration-200',
+                    isNavigating && 'opacity-50 pointer-events-none',
+                )}
+                aria-busy={isNavigating}
+            >
             {/* Summary Bar */}
             {initialSummary && (
                 <Card className="mb-8 animate-fade-in">
@@ -280,6 +292,7 @@ export function TransactionsView({
                     Next month
                     <ChevronRight className="h-4 w-4 ml-2" />
                 </Button>
+            </div>
             </div>
         </div>
     )

@@ -1,4 +1,4 @@
-import { signOut } from '@/app/actions/auth'
+import { SignOutButton } from '@clerk/nextjs'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { BarChart3, FileText, Home, Receipt, Settings, User } from 'lucide-react'
@@ -43,11 +43,11 @@ export function NavHeader() {
                     </nav>
                 </div>
                 <div className="flex flex-1 items-center justify-end space-x-2">
-                    <form action={signOut}>
-                        <Button variant="ghost" size="sm" type="submit">
+                    <SignOutButton redirectUrl="/">
+                        <Button variant="ghost" size="sm">
                             Logout
                         </Button>
-                    </form>
+                    </SignOutButton>
                     <Separator orientation="vertical" className="h-6" />
                     <Button variant="ghost" size="icon" disabled>
                         <Settings className="h-4 w-4" />

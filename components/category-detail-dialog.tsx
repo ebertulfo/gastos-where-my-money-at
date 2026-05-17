@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/dialog'
 import { TransactionTable } from '@/components/transaction-table'
 import type { CategoryOption } from '@/components/category-picker'
-import type { Tag } from '@/lib/supabase/database.types'
+import type { Tag } from '@/db/schema'
 import type { Transaction } from '@/lib/types/transaction'
 import type { InsightsFilters, InsightsPeriod } from '@/lib/types/insights'
 import { formatCurrency } from '@/lib/utils'

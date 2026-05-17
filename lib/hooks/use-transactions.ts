@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import type { Transaction, MonthSummary } from '@/lib/types/transaction'
-import type { Tag } from '@/lib/supabase/database.types'
+import type { Tag } from '@/db/schema'
 import { getTransactions, getMonthSummary, getAvailableMonthsList, getStatementsForMonth } from '@/app/actions/transactions'
 import { getTags } from '@/app/actions/tags'
 import { refreshTransactionData } from '@/app/actions/composite'

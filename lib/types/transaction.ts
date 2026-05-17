@@ -32,11 +32,15 @@ export interface Transaction {
 export interface Statement {
     id: string
     bankName: string
+    /** Raw bank slug as stored on the row. Edit dialog writes through this; display uses bankName. */
+    bankRaw: string | null
     accountLabel?: string
     statementType: 'debit' | 'credit' | 'investment'
     periodStart: string
     periodEnd: string
     currency: string
+    /** Opening balance printed on the statement (debit/investment only). null = none/credit-card. */
+    previousBalance: number | null
     transactionCount: number
     status: 'parsed' | 'reviewing' | 'ingested' | 'failed'
     fileHash: string

@@ -1,12 +1,11 @@
 'use client'
 
+import { useAuth } from '@clerk/nextjs'
 import { useState, useCallback } from 'react'
-import { supabase } from '@/lib/supabase/client'
 
 async function uploadStatement(
     file: File,
     memberIds: string[],
-    token?: string,
 ): Promise<{ statementId: string; isDuplicate?: boolean }> {
     const formData = new FormData()
     formData.append('file', file)
@@ -14,12 +13,10 @@ async function uploadStatement(
         formData.append('member_ids', id)
     }
 
-    const headers: HeadersInit = {}
-    if (token) headers['Authorization'] = `Bearer ${token}`
-
+    // Clerk authenticates the request via session cookie automatically — no
+    // bearer token needed since the API route uses auth() from @clerk/nextjs/server.
     const response = await fetch('/api/statements/ingest', {
         method: 'POST',
-        headers,
         body: formData,
     })
 
@@ -48,6 +45,7 @@ interface UseStatementUploadReturn {
 }
 
 export function useStatementUpload(): UseStatementUploadReturn {
+    const { isSignedIn } = useAuth()
     const [uploads, setUploads] = useState<UploadState[]>([])
     const [isUploading, setIsUploading] = useState(false)
 
@@ -59,67 +57,54 @@ export function useStatementUpload(): UseStatementUploadReturn {
     const upload = useCallback(async (files: File[], memberIds: string[] = []) => {
         setIsUploading(true)
 
-        // Check for session
-        const { data: { session } } = await supabase.auth.getSession()
-        if (!session) {
+        if (!isSignedIn) {
             setUploads(prev => [...prev, ...files.map(f => ({
                 id: Math.random().toString(36).substring(7),
                 file: f,
                 status: 'error' as const,
                 progress: 0,
-                error: "You must be logged in to upload statements."
+                error: 'You must be logged in to upload statements.',
             }))])
             setIsUploading(false)
             return
         }
-        
-        // Initialize state for new files
+
         const newUploads = files.map(file => ({
             id: Math.random().toString(36).substring(7),
             file,
             status: 'pending' as const,
-            progress: 0
+            progress: 0,
         }))
 
         setUploads(prev => [...prev, ...newUploads])
 
-        // Process files sequentially to avoid overwhelming the server
-        // (Parallel could be an option for small batches)
         for (const uploadItem of newUploads) {
-            setUploads(prev => prev.map(u => 
-                u.id === uploadItem.id ? { ...u, status: 'uploading', progress: 0 } : u
+            setUploads(prev => prev.map(u =>
+                u.id === uploadItem.id ? { ...u, status: 'uploading', progress: 0 } : u,
             ))
 
             try {
-                // Upload
-                setUploads(prev => prev.map(u => 
-                    u.id === uploadItem.id ? { ...u, progress: 50, status: 'processing' } : u
+                setUploads(prev => prev.map(u =>
+                    u.id === uploadItem.id ? { ...u, progress: 50, status: 'processing' } : u,
                 ))
 
-                // Get the latest session to ensure we have the token
-                const { data: { session } } = await supabase.auth.getSession()
-                const { statementId } = await uploadStatement(uploadItem.file, memberIds, session?.access_token)
+                const { statementId } = await uploadStatement(uploadItem.file, memberIds)
 
-                // Success
-                setUploads(prev => prev.map(u => 
-                    u.id === uploadItem.id ? { 
-                        ...u, 
-                        status: 'complete', 
-                        progress: 100, 
-                        statementId 
-                    } : u
+                setUploads(prev => prev.map(u =>
+                    u.id === uploadItem.id
+                        ? { ...u, status: 'complete', progress: 100, statementId }
+                        : u,
                 ))
-
             } catch (err) {
                 const errorMsg = err instanceof Error ? err.message : 'Upload failed'
-                setUploads(prev => prev.map(u => 
-                    u.id === uploadItem.id ? { ...u, status: 'error', error: errorMsg } : u
+                setUploads(prev => prev.map(u =>
+                    u.id === uploadItem.id ? { ...u, status: 'error', error: errorMsg } : u,
                 ))
             }
         }
 
         setIsUploading(false)
-    }, [])
+    }, [isSignedIn])
 
     return {
         upload,

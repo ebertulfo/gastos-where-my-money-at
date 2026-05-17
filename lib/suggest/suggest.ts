@@ -1,3 +1,7 @@
+import { and, eq, sql } from 'drizzle-orm'
+
+import { db } from '@/lib/db'
+import { tags as tagsTable, transactions, userSettings } from '@/db/schema'
 import { embedTexts } from './embed'
 import { suggestViaLLM } from './llm'
 import type { NeighbourRow, TagEmbedCandidate, TagNode, TagSuggestion } from './types'
@@ -8,30 +12,16 @@ const KNN_LIMIT = 20
 const MIN_STRONG_FOR_PURE_KNN = 3
 const PRIMARY_WEIGHT_MULTIPLIER = 1.5
 
-// Tag embeddings are (name + description) vs merchant text — different
-// register, so absolute cosine similarities run lower than transaction-
-// to-transaction scores. Calibrated by eye; tune once we have real data.
 const TAG_EMBED_LIMIT = 10
 const TAG_EMBED_MIN_SIMILARITY = 0.30
 const TAG_EMBED_STRONG_SIMILARITY = 0.35
 const MIN_STRONG_FOR_TAG_EMBED_ONLY = 2
-// How much a tag-embed hit contributes on top of a KNN-winning tag.
-// KNN normalized to [0, 1]; this caps tag-embed's additive bump.
 const TAG_EMBED_BLEND_WEIGHT = 0.4
 
 interface SuggestArgs {
-  supabase: any
   userId: string
   transactionId: string
   limit?: number
-}
-
-interface TransactionRow {
-  id: string
-  description: string
-  amount: number
-  date: string
-  description_embedding: number[] | null
 }
 
 /**
@@ -39,65 +29,67 @@ interface TransactionRow {
  * 1. KNN over the user's tagged history (existing) — dominant when the
  *    user has tagged similar merchants before.
  * 2. Tag embeddings (name + description vs the transaction) — picks up
- *    semantic matches even on first encounter ("OSAKA JP" → Japan).
+ *    semantic matches even on first encounter.
  * 3. LLM fallback — only when both above produce nothing usable.
- * Hierarchy collapse runs at the end so child tags win over parents.
  */
 export async function suggestTagsForTransaction(args: SuggestArgs): Promise<TagSuggestion[]> {
-  const { supabase, userId, transactionId } = args
+  const { userId, transactionId } = args
   const limit = args.limit ?? 5
 
-  // 1. Fetch the transaction (and its embedding if present).
-  const { data: txData, error: txError } = await supabase
-    .from('transactions')
-    .select('id, description, amount, date, description_embedding')
-    .eq('id', transactionId)
-    .eq('user_id', userId)
-    .maybeSingle()
+  const [tx] = await db
+    .select({
+      id: transactions.id,
+      description: transactions.description,
+      amount: transactions.amount,
+      date: transactions.date,
+      descriptionEmbedding: transactions.descriptionEmbedding,
+    })
+    .from(transactions)
+    .where(and(eq(transactions.id, transactionId), eq(transactions.userId, userId)))
+    .limit(1)
 
-  if (txError || !txData) return []
-  const tx = txData as TransactionRow
+  if (!tx) return []
 
-  // 2. Lazily embed if missing. Persist in the background so the next
-  // suggestion pass on this row skips the call.
-  let txEmbedding = tx.description_embedding
+  let txEmbedding: number[] | null = tx.descriptionEmbedding ?? null
   if (!txEmbedding) {
     const result = await embedTexts([tx.description])
-    if (!result || result.embeddings.length === 0) {
-      txEmbedding = null
-    } else {
+    if (result && result.embeddings.length > 0) {
       txEmbedding = result.embeddings[0]
-      supabase
-        .from('transactions')
-        .update({ description_embedding: txEmbedding as any })
-        .eq('id', transactionId)
+      // Persist in background; ignore failures.
+      db
+        .update(transactions)
+        .set({ descriptionEmbedding: txEmbedding })
+        .where(eq(transactions.id, transactionId))
         .then(() => undefined, () => undefined)
     }
   }
 
-  // 3. Fetch user's tags (always — needed for every path).
-  const { data: tagsData } = await supabase
-    .from('tags')
-    .select('id, name, color, parent_id')
-    .eq('user_id', userId)
+  const tagRows = await db
+    .select({
+      id: tagsTable.id,
+      name: tagsTable.name,
+      color: tagsTable.color,
+      parentId: tagsTable.parentId,
+    })
+    .from(tagsTable)
+    .where(eq(tagsTable.userId, userId))
 
-  const tags: TagNode[] = ((tagsData ?? []) as { id: string; name: string; color: string | null; parent_id: string | null }[]).map(t => ({
+  const tags: TagNode[] = tagRows.map(t => ({
     id: t.id,
     name: t.name,
     color: t.color,
-    parentId: t.parent_id,
+    parentId: t.parentId,
   }))
 
   if (tags.length === 0) return []
 
-  // 4. Fetch both KNN signals in parallel when we have an embedding.
   let strong: NeighbourRow[] = []
   let weak: NeighbourRow[] = []
   let tagEmbed: TagEmbedCandidate[] = []
   if (txEmbedding) {
     const [neighbours, tagCandidates] = await Promise.all([
-      knnNeighbours(supabase, userId, transactionId, txEmbedding),
-      knnNearestTags(supabase, userId, txEmbedding),
+      knnNeighbours(userId, transactionId, txEmbedding),
+      knnNearestTags(userId, txEmbedding),
     ])
     for (const n of neighbours) {
       if (n.similarity >= STRONG_THRESHOLD) strong.push(n)
@@ -109,29 +101,22 @@ export async function suggestTagsForTransaction(args: SuggestArgs): Promise<TagS
   const useableTagEmbed = tagEmbed.filter(c => c.similarity >= TAG_EMBED_MIN_SIMILARITY)
   const strongTagEmbed = tagEmbed.filter(c => c.similarity >= TAG_EMBED_STRONG_SIMILARITY)
 
-  // 5. Decision branch.
   let raw: TagSuggestion[]
   if (strong.length >= MIN_STRONG_FOR_PURE_KNN) {
-    // KNN dominates; tag-embed augments.
     raw = voteFromKNNWithTagEmbed(strong, useableTagEmbed, limit)
   } else if (strongTagEmbed.length >= MIN_STRONG_FOR_TAG_EMBED_ONLY) {
-    // No prior user history for this merchant, but tag descriptions match.
     raw = tagEmbedAsSuggestions(strongTagEmbed, limit)
   } else {
-    // Fall back to LLM with weak KNN as few-shot, then union tag-embed
-    // candidates so semantically-obvious tags (e.g. "japan" for a JR JP
-    // transaction) aren't dropped just because the LLM picked functional
-    // categories (hotels/flights/activities) instead.
-    const { data: settingsData } = await supabase
-      .from('user_settings')
-      .select('country')
-      .eq('user_id', userId)
-      .maybeSingle()
-    const country = (settingsData as { country?: string } | null)?.country ?? null
+    const [settings] = await db
+      .select({ country: userSettings.country })
+      .from(userSettings)
+      .where(eq(userSettings.userId, userId))
+      .limit(1)
+    const country = settings?.country ?? null
 
     const llmSuggestions = await suggestViaLLM({
       userId,
-      tx: { description: tx.description, amount: tx.amount, date: tx.date },
+      tx: { description: tx.description, amount: Number(tx.amount), date: tx.date },
       tags,
       fewShotNeighbours: weak,
       userCountry: country,
@@ -144,40 +129,45 @@ export async function suggestTagsForTransaction(args: SuggestArgs): Promise<TagS
     raw = mergeLLMWithTagEmbed(llmSuggestions, useableTagEmbed, knnTagIds, limit)
   }
 
-  // 6. Hierarchy collapse — drop ancestors whose descendants are in.
   const collapsed = collapseHierarchy(raw, tags)
 
   return collapsed.slice(0, limit)
 }
 
-interface KNNRowJoin {
+interface KNNNeighbourRow {
   id: string
   description: string
   similarity: number
-  transaction_tags: { tag_id: string; is_primary: boolean }[]
+  transaction_tags: { tag_id: string; is_primary: boolean }[] | null
+}
+
+// pgvector accepts a JSON-array-style string for the parameter. Drizzle's
+// vector column type writes literal vector format on update; for RPC params
+// we serialize manually.
+function vectorLiteral(v: number[]): string {
+  return `[${v.join(',')}]`
 }
 
 async function knnNeighbours(
-  supabase: any,
   userId: string,
   excludeId: string,
   embedding: number[],
 ): Promise<NeighbourRow[]> {
-  const { data, error } = await supabase.rpc('knn_neighbour_tags', {
-    p_user_id: userId,
-    p_exclude_id: excludeId,
-    p_embedding: embedding as unknown as string,
-    p_limit: KNN_LIMIT,
-  })
-
-  if (error || !data) return []
-
-  return (data as KNNRowJoin[]).map(r => ({
-    transactionId: r.id,
-    description: r.description,
-    similarity: r.similarity,
-    tags: (r.transaction_tags ?? []).map(t => ({ tagId: t.tag_id, isPrimary: t.is_primary })),
-  }))
+  try {
+    const result = await db.execute(
+      sql`select * from knn_neighbour_tags(${userId}, ${excludeId}::uuid, ${vectorLiteral(embedding)}::vector(1536), ${KNN_LIMIT})`,
+    )
+    const rows = ((result as unknown as { rows?: KNNNeighbourRow[] }).rows
+      ?? (result as unknown as KNNNeighbourRow[]))
+    return rows.map(r => ({
+      transactionId: r.id,
+      description: r.description,
+      similarity: r.similarity,
+      tags: (r.transaction_tags ?? []).map(t => ({ tagId: t.tag_id, isPrimary: t.is_primary })),
+    }))
+  } catch {
+    return []
+  }
 }
 
 interface TagEmbedRow {
@@ -187,23 +177,23 @@ interface TagEmbedRow {
 }
 
 async function knnNearestTags(
-  supabase: any,
   userId: string,
   embedding: number[],
 ): Promise<TagEmbedCandidate[]> {
-  const { data, error } = await supabase.rpc('knn_nearest_tags', {
-    p_user_id: userId,
-    p_embedding: embedding as unknown as string,
-    p_limit: TAG_EMBED_LIMIT,
-  })
-
-  if (error || !data) return []
-
-  return (data as TagEmbedRow[]).map(r => ({
-    tagId: r.id,
-    name: r.name,
-    similarity: r.similarity,
-  }))
+  try {
+    const result = await db.execute(
+      sql`select * from knn_nearest_tags(${userId}, ${vectorLiteral(embedding)}::vector(1536), ${TAG_EMBED_LIMIT})`,
+    )
+    const rows = ((result as unknown as { rows?: TagEmbedRow[] }).rows
+      ?? (result as unknown as TagEmbedRow[]))
+    return rows.map(r => ({
+      tagId: r.id,
+      name: r.name,
+      similarity: r.similarity,
+    }))
+  } catch {
+    return []
+  }
 }
 
 function tagEmbedAsSuggestions(
@@ -219,15 +209,6 @@ function tagEmbedAsSuggestions(
   }))
 }
 
-/**
- * LLM-primary merge: the LLM's ranking drives the top slots, but any
- * tag-embed hit the LLM missed is unioned onto the end with a confidence
- * derived from similarity. Overlaps get annotated as 'mixed'.
- *
- * Callers pass the KNN-derived tag IDs only to annotate overlap sources,
- * not to contribute scores (the KNN signal was too weak to dominate, else
- * we'd have taken the KNN branch).
- */
 function mergeLLMWithTagEmbed(
   llm: TagSuggestion[],
   tagEmbed: TagEmbedCandidate[],
@@ -236,16 +217,11 @@ function mergeLLMWithTagEmbed(
 ): TagSuggestion[] {
   const byId = new Map<string, TagSuggestion>()
 
-  // Annotate LLM picks with 'mixed' where another signal agrees.
   for (const s of llm) {
     const supported = knnTagIds.has(s.tagId) || tagEmbed.some(c => c.tagId === s.tagId)
     byId.set(s.tagId, { ...s, source: supported ? 'mixed' : 'llm' })
   }
 
-  // Append tag-embed-only candidates. Confidence = similarity (already in
-  // [0, 1]-ish); the LLM's rank-based confidences start at 1.0, so these
-  // sort below the LLM's top pick unless similarity is very high — which
-  // is exactly the ordering we want.
   for (const c of tagEmbed) {
     if (byId.has(c.tagId)) continue
     byId.set(c.tagId, {
@@ -273,7 +249,6 @@ function voteFromKNNWithTagEmbed(
 ): TagSuggestion[] {
   const entries = new Map<string, BlendEntry>()
 
-  // KNN vote (same weighting as before — similarity × primary multiplier).
   let rawKnnTop = 0
   const knnRaw = new Map<string, number>()
   for (const n of neighbours) {
@@ -289,7 +264,6 @@ function voteFromKNNWithTagEmbed(
     entries.set(tagId, { score: normalized, fromKNN: true, fromTagEmbed: false })
   }
 
-  // Tag-embed contribution: additive, capped at TAG_EMBED_BLEND_WEIGHT × sim.
   for (const c of tagEmbed) {
     const existing = entries.get(c.tagId)
     const bump = c.similarity * TAG_EMBED_BLEND_WEIGHT
@@ -336,8 +310,6 @@ export function collapseHierarchy(suggestions: TagSuggestion[], tags: TagNode[])
     return out
   }
 
-  // Any suggested tag that is an ancestor of any OTHER suggested tag gets
-  // suppressed. Order is preserved.
   const suggestedIds = new Set(suggestions.map(s => s.tagId))
   const suppress = new Set<string>()
   for (const s of suggestions) {

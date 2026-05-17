@@ -7,6 +7,7 @@ import {
   getInsights,
   getYearsWithDataList,
 } from '@/app/actions/transactions'
+import { getTripBreakdown } from '@/app/actions/trips'
 import { InsightsView } from '@/components/insights-view'
 import { NavHeader } from '@/components/nav-header'
 import { Button } from '@/components/ui/button'
@@ -109,10 +110,10 @@ export default async function InsightsPage({ searchParams }: PageProps) {
     : params.travel === 'exclude' ? 'no-travel'
     : 'all'
 
-  const insights = await getInsights(period, {
-    memberIds: requestedMemberIds,
-    travelMode,
-  })
+  const [insights, tripBreakdown] = await Promise.all([
+    getInsights(period, { memberIds: requestedMemberIds, travelMode }),
+    getTripBreakdown(),
+  ])
 
   return (
     <div className="min-h-screen bg-background">
@@ -137,6 +138,7 @@ export default async function InsightsPage({ searchParams }: PageProps) {
             name: c.name,
             parent_id: c.parent_id,
           }))}
+          tripBreakdown={tripBreakdown}
         />
       </main>
     </div>

@@ -1,54 +1,52 @@
-import { createHash } from 'crypto';
-import { createServerClient } from '@/lib/supabase/client';
-import { generateTransactionIdentifier, normalizeDateToYyyyMmDd } from '@/lib/transaction-identifier';
-import { autoApplyCategoriesBatch, llmFallbackForUncategorizedImports } from '@/lib/suggest/auto-apply';
-import { Database } from '@/lib/supabase/database.types';
+import { createHash } from 'crypto'
+import { revalidateTag } from 'next/cache'
+import { and, eq, inArray } from 'drizzle-orm'
 
-type StatementInsert = Database['public']['Tables']['statements']['Insert'];
-type TransactionImportInsert = Database['public']['Tables']['transaction_imports']['Insert'];
+import { db } from '@/lib/db'
+import { tag } from '@/lib/cache/tags'
+import {
+  statements,
+  statementMembers,
+  transactionImports,
+  transactions,
+} from '@/db/schema'
+import {
+  generateTransactionIdentifier,
+  normalizeDateToYyyyMmDd,
+} from '@/lib/transaction-identifier'
+import {
+  autoApplyCategoriesBatch,
+  llmFallbackForUncategorizedImports,
+} from '@/lib/suggest/auto-apply'
+
+type StatementTypeValue = 'debit' | 'credit' | 'investment'
+
 type TransactionRow = {
-  date: string;
-  description: string;
-  amount: number;
-  balance?: number;
-};
-
-type StatementTypeValue = 'debit' | 'credit' | 'investment';
-
-interface IngestOptions {
-  fileName: string;
-  fileBuffer: Buffer;
-  rows: TransactionRow[];
-  metadata: {
-    periodStart?: string;
-    periodEnd?: string;
-    /** Bank display name parsed from the statement header (e.g. "DBS/POSB"). */
-    bank?: string;
-    /** Statement type parsed from the statement header. */
-    statementType?: StatementTypeValue;
-    /** Last 4 digits of the card / account, parsed from the header. */
-    accountLast4?: string;
-    currency?: string;
-    /** Reconciliation anchor (cycle close − previous balance for cards, total withdrawals for banks). */
-    expectedTotal?: number | null;
-    expectedTotalKind?: 'cc_new_charges_signed' | 'bank_withdrawals_abs' | null;
-    /** Credit cards only. */
-    previousBalance?: number | null;
-    /**
-     * Optional household_members.id list selected by the uploader. A
-     * statement can belong to more than one member (joint cards,
-     * supplementary cards). Empty/undefined = unspecified attribution.
-     * RLS on statement_members ensures cross-user references fail.
-     */
-    memberIds?: string[];
-  };
-  userId: string;
+  date: string
+  description: string
+  amount: number
+  balance?: number
 }
 
-// Best-effort bank slug from the original filename. Used only inside the
-// redacted source_file_name; never round-tripped to display. Falls back to
-// 'unknown' rather than guessing wildly. Order matters: longer/more specific
-// tokens first so "dbs_posb" wins over "dbs".
+interface IngestOptions {
+  fileName: string
+  fileBuffer: Buffer
+  rows: TransactionRow[]
+  metadata: {
+    periodStart?: string
+    periodEnd?: string
+    bank?: string
+    statementType?: StatementTypeValue
+    accountLast4?: string
+    currency?: string
+    expectedTotal?: number | null
+    expectedTotalKind?: 'cc_new_charges_signed' | 'bank_withdrawals_abs' | null
+    previousBalance?: number | null
+    memberIds?: string[]
+  }
+  userId: string
+}
+
 const BANK_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/dbs[\s_-]*posb/i, 'dbs_posb'],
   [/standard[\s_-]*chartered|stan[\s_-]*chart/i, 'stanchart'],
@@ -59,40 +57,40 @@ const BANK_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/ocbc/i, 'ocbc'],
   [/uob/i, 'uob'],
   [/dbs/i, 'dbs'],
-];
+]
 
 function detectBankSlug(originalFileName: string): string {
   for (const [re, slug] of BANK_PATTERNS) {
-    if (re.test(originalFileName)) return slug;
+    if (re.test(originalFileName)) return slug
   }
-  return 'unknown';
+  return 'unknown'
 }
 
 function detectStatementType(originalFileName: string): StatementTypeValue {
-  if (/investment/i.test(originalFileName)) return 'investment';
-  if (/credit/i.test(originalFileName)) return 'credit';
-  return 'debit';
+  if (/investment/i.test(originalFileName)) return 'investment'
+  if (/credit/i.test(originalFileName)) return 'credit'
+  return 'debit'
 }
 
 // {hash8}-{type}-{bank}-{MM-YYYY}.pdf — strips the original filename which
-// often contains the user's real name (e.g. "DBS_POSB_JaneDoe_Dec2025.pdf").
+// often contains the user's real name.
 function redactFileName(
   fileHash: string,
   type: StatementTypeValue,
   bankSlug: string,
   periodStart: string | undefined,
 ): string {
-  const hash8 = fileHash.slice(0, 8);
-  let mmYyyy = 'unknown';
+  const hash8 = fileHash.slice(0, 8)
+  let mmYyyy = 'unknown'
   if (periodStart) {
-    const d = new Date(periodStart);
+    const d = new Date(periodStart)
     if (!isNaN(d.getTime())) {
-      const mm = String(d.getMonth() + 1).padStart(2, '0');
-      const yyyy = String(d.getFullYear());
-      mmYyyy = `${mm}-${yyyy}`;
+      const mm = String(d.getMonth() + 1).padStart(2, '0')
+      const yyyy = String(d.getFullYear())
+      mmYyyy = `${mm}-${yyyy}`
     }
   }
-  return `${hash8}-${type}-${bankSlug}-${mmYyyy}.pdf`;
+  return `${hash8}-${type}-${bankSlug}-${mmYyyy}.pdf`
 }
 
 export async function ingestStatement({
@@ -102,221 +100,205 @@ export async function ingestStatement({
   metadata,
   userId,
 }: IngestOptions) {
-  try {
-  const supabase = createServerClient();
-  console.log('Ingesting statement', fileName);
-  // 1. Calculate File Hash
-  const fileHash = createHash('sha256').update(fileBuffer).digest('hex');
+  console.log('Ingesting statement', fileName)
+  const fileHash = createHash('sha256').update(fileBuffer).digest('hex')
 
-  // 2. Check if statement exists
-  const { data: existingStatementData } = await (supabase as any)
-    .from('statements')
-    .select('id, status')
-    .eq('source_file_sha256', fileHash)
-    .eq('uploaded_by', userId)
-    .maybeSingle();
-    
-  // Force cast to avoid 'never' type inference issue
-  const existingStatement = existingStatementData as any;
+  // Idempotent on (uploaded_by, source_file_sha256).
+  const [existing] = await db
+    .select({ id: statements.id, status: statements.status })
+    .from(statements)
+    .where(
+      and(
+        eq(statements.sourceFileSha256, fileHash),
+        eq(statements.uploadedBy, userId),
+      ),
+    )
+    .limit(1)
 
-  if (existingStatement) {
+  if (existing) {
     return {
       success: true,
-      statementId: existingStatement.id,
+      statementId: existing.id,
       isDuplicate: true,
-      status: existingStatement.status,
-    };
+      status: existing.status,
+    }
   }
 
   if (!metadata.periodStart || !metadata.periodEnd) {
-      throw new Error("Statement period start and end are required.");
+    throw new Error('Statement period start and end are required.')
   }
 
-  // 3. Privacy strip — prefer statement-header metadata over filename
-  // heuristics, fall back to the filename slug when the header didn't
-  // surface anything. account_name is never stored.
   const statementType: StatementTypeValue =
-    metadata.statementType ?? detectStatementType(fileName);
+    metadata.statementType ?? detectStatementType(fileName)
   const bankSlug = metadata.bank
-    ? metadata.bank.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
-    : detectBankSlug(fileName);
-  const redactedFileName = redactFileName(fileHash, statementType, bankSlug, metadata.periodStart);
+    ? metadata.bank
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+    : detectBankSlug(fileName)
+  const redactedFileName = redactFileName(
+    fileHash,
+    statementType,
+    bankSlug,
+    metadata.periodStart,
+  )
 
-  // 4. Create Statement Record. Bank display value prefers the
-  // header-parsed humanised name ("DBS/POSB") so the UI doesn't have to
-  // re-humanise; account_last4 is the only PAN-derived field we store.
-  const statementData: StatementInsert = {
-    source_file_name: redactedFileName,
-    source_file_sha256: fileHash,
-    uploaded_by: userId,
-    period_start: metadata.periodStart,
-    period_end: metadata.periodEnd,
-    bank: metadata.bank || (bankSlug !== 'unknown' ? bankSlug : null),
-    account_last4: metadata.accountLast4 || null,
-    currency: metadata.currency || 'SGD',
-    status: 'ingesting',
-    statement_type: statementType,
-    expected_total: metadata.expectedTotal ?? null,
-    expected_total_kind: metadata.expectedTotalKind ?? null,
-    previous_balance: metadata.previousBalance ?? null,
-  };
+  const [statement] = await db
+    .insert(statements)
+    .values({
+      sourceFileName: redactedFileName,
+      sourceFileSha256: fileHash,
+      uploadedBy: userId,
+      periodStart: metadata.periodStart,
+      periodEnd: metadata.periodEnd,
+      bank: metadata.bank || (bankSlug !== 'unknown' ? bankSlug : null),
+      accountLast4: metadata.accountLast4 || null,
+      currency: metadata.currency || 'SGD',
+      status: 'ingesting',
+      statementType,
+      expectedTotal: metadata.expectedTotal != null ? String(metadata.expectedTotal) : null,
+      expectedTotalKind: metadata.expectedTotalKind ?? null,
+      previousBalance: metadata.previousBalance != null ? String(metadata.previousBalance) : null,
+    })
+    .returning()
 
-  const { data, error: statementError } = await (supabase as any)
-    .from('statements')
-    .insert(statementData)
-    .select()
-    .single();
-
-  console.log('Created statement', data);
-  // Explicitly cast or check to satisfy TS if inference fails
-  const statement = data as any;
-
-  if (statementError || !statement) {
-    throw new Error(`Failed to create statement: ${statementError?.message}`);
+  if (!statement) {
+    throw new Error('Failed to create statement')
   }
 
-  // 4a. Attach members via the junction. Dedupe just in case; RLS
-  // enforces ownership on insert. Empty array = unspecified attribution.
-  const uniqueMemberIds = Array.from(new Set((metadata.memberIds ?? []).filter(Boolean)));
+  console.log('Created statement', statement.id)
+
+  const uniqueMemberIds = Array.from(
+    new Set((metadata.memberIds ?? []).filter(Boolean)),
+  )
   if (uniqueMemberIds.length > 0) {
-    const memberRows = uniqueMemberIds.map((mid) => ({
-      statement_id: statement.id as string,
-      member_id: mid,
-    }));
-    const { error: memberError } = await (supabase as any)
-      .from('statement_members')
-      .insert(memberRows);
-    if (memberError) {
-      // Don't fail ingest over attribution — statement is still useful.
-      console.warn('Failed to attach members to statement', memberError);
+    try {
+      await db.insert(statementMembers).values(
+        uniqueMemberIds.map(mid => ({
+          statementId: statement.id,
+          memberId: mid,
+        })),
+      )
+    } catch (err) {
+      // Don't fail ingest over attribution.
+      console.warn('Failed to attach members to statement', err)
     }
   }
 
-  // 4. Prepare Transaction Imports
-  const importRows: TransactionImportInsert[] = [];
-  
-  // ... (lines 90-126 unchanged, assuming correct) ...
-  const transactionsWithIds = rows.map((row) => {
-    // Use metadata year if available to help with ID generation
-    let dateForId = row.date;
+  // Build per-row identifiers + month buckets.
+  const transactionsWithIds = rows.map(row => {
+    let dateForId = row.date
     if (metadata.periodStart) {
-        const year = new Date(metadata.periodStart).getFullYear();
-        if (row.date && !/\d{4}/.test(row.date)) {
-             dateForId = `${row.date} ${year}`;
-        }
+      const year = new Date(metadata.periodStart).getFullYear()
+      if (row.date && !/\d{4}/.test(row.date)) {
+        dateForId = `${row.date} ${year}`
+      }
     }
-    
+
     const id = generateTransactionIdentifier({
       date: dateForId,
       amount: row.amount.toString(),
       balance: row.balance?.toString() || '0',
       description: row.description,
-    });
-    
-    // Derive month bucket YYYY-MM from valid standardized date
-    let monthBucket = '0000-00';
+    })
+
+    let monthBucket = '0000-00'
     try {
-        // We re-use the normalization logic to ensure the bucket matches exactly what goes into the ID and DB
-        const yyyyMmDd = normalizeDateToYyyyMmDd(dateForId);
-        monthBucket = `${yyyyMmDd.substring(0, 4)}-${yyyyMmDd.substring(4, 6)}`;
-    } catch (e) {
-        console.warn("Invalid date for bucket", row.date);
+      const yyyyMmDd = normalizeDateToYyyyMmDd(dateForId)
+      monthBucket = `${yyyyMmDd.substring(0, 4)}-${yyyyMmDd.substring(4, 6)}`
+    } catch {
+      console.warn('Invalid date for bucket', row.date)
     }
 
-    return { ...row, transaction_identifier: id, month_bucket: monthBucket };
-  });
+    return { ...row, transaction_identifier: id, month_bucket: monthBucket }
+  })
 
-  const allIds = transactionsWithIds.map(t => t.transaction_identifier);
+  const allIds = transactionsWithIds.map(t => t.transaction_identifier)
 
-  // Find duplicates in existing transactions
-  const { data: duplicates } = await (supabase as any)
-    .from('transactions')
-    .select('id, transaction_identifier')
-    .eq('user_id', userId)
-    .in('transaction_identifier', allIds);
+  const duplicates = allIds.length
+    ? await db
+        .select({
+          id: transactions.id,
+          identifier: transactions.transactionIdentifier,
+        })
+        .from(transactions)
+        .where(
+          and(
+            eq(transactions.userId, userId),
+            inArray(transactions.transactionIdentifier, allIds),
+          ),
+        )
+    : []
 
-  const duplicateMap = new Map<string, string>(); // identifier -> existing_transaction_id
-  if (duplicates) {
-    duplicates.forEach((d: any) => duplicateMap.set(d.transaction_identifier, d.id));
-  }
+  const duplicateMap = new Map<string, string>()
+  for (const d of duplicates) duplicateMap.set(d.identifier, d.id)
 
-  // Build insert payload
-  for (const t of transactionsWithIds) {
-    console.log('Processing transaction', t);
-    const existingId = duplicateMap.get(t.transaction_identifier);
-
-    // Normalize date to YYYY-MM-DD for database
-    // Re-construct the date used for ID generation to ensure consistency
-    let dateForId = t.date;
+  const importRows = transactionsWithIds.map(t => {
+    let dateForId = t.date
     if (metadata.periodStart) {
-        const year = new Date(metadata.periodStart).getFullYear();
-        if (t.date && !/\d{4}/.test(t.date)) {
-             dateForId = `${t.date} ${year}`;
-        }
+      const year = new Date(metadata.periodStart).getFullYear()
+      if (t.date && !/\d{4}/.test(t.date)) {
+        dateForId = `${t.date} ${year}`
+      }
     }
-    
-    let dbDate = t.date;
+    let dbDate = t.date
     try {
-        const yyyyMmDd = normalizeDateToYyyyMmDd(dateForId);
-        dbDate = `${yyyyMmDd.substring(0, 4)}-${yyyyMmDd.substring(4, 6)}-${yyyyMmDd.substring(6, 8)}`;
+      const yyyyMmDd = normalizeDateToYyyyMmDd(dateForId)
+      dbDate = `${yyyyMmDd.substring(0, 4)}-${yyyyMmDd.substring(4, 6)}-${yyyyMmDd.substring(6, 8)}`
     } catch (e) {
-        console.warn('Failed to normalize date for DB:', t.date, e);
+      console.warn('Failed to normalize date for DB:', t.date, e)
     }
 
-    importRows.push({
-      statement_id: statement.id,
-      transaction_identifier: t.transaction_identifier,
-      resolution: 'pending',
-      existing_transaction_id: existingId || null,
+    return {
+      statementId: statement.id,
+      transactionIdentifier: t.transaction_identifier,
+      resolution: 'pending' as const,
+      existingTransactionId: duplicateMap.get(t.transaction_identifier) ?? null,
       date: dbDate,
-      month_bucket: t.month_bucket,
+      monthBucket: t.month_bucket,
       description: t.description,
-      amount: t.amount,
-      balance: t.balance || null,
-    });
+      amount: String(t.amount),
+      balance: t.balance != null ? String(t.balance) : null,
+    }
+  })
+
+  console.log('Inserting imports, count:', importRows.length)
+
+  let insertedIds: string[] = []
+  try {
+    if (importRows.length > 0) {
+      const inserted = await db
+        .insert(transactionImports)
+        .values(importRows)
+        .returning({ id: transactionImports.id })
+      insertedIds = inserted.map(r => r.id)
+    }
+  } catch (err) {
+    await db.delete(statements).where(eq(statements.id, statement.id))
+    const msg = err instanceof Error ? err.message : 'unknown'
+    throw new Error(`Failed to import transactions: ${msg}`)
   }
 
-  console.log('Inserting imports, count:', importRows.length);
-  // Batch insert + capture ids for auto-apply.
-  const { data: insertedImports, error: importError } = await (supabase as any)
-    .from('transaction_imports')
-    .insert(importRows)
-    .select('id');
-
-  if (importError) {
-    // If imports fail, cleanup the statement so the user can retry
-    await (supabase as any).from('statements').delete().eq('id', statement.id);
-    throw new Error(`Failed to import transactions: ${importError.message}`);
-  }
-
-  const insertedIds = ((insertedImports ?? []) as { id: string }[]).map(r => r.id);
-
-  // 5. Auto-apply: free signals first (KNN + tag-embed, ~3s for 200 rows),
-  // then LLM for the cold tail. Both sync so the review screen shows the
-  // FINAL categorization — that's where the user verifies before commit,
-  // so a partial preview is worse than waiting another 10-30s here.
-  // Budget gates the LLM; partial output is fine.
   if (insertedIds.length > 0) {
-    await autoApplyCategoriesBatch(supabase, userId, insertedIds);
-    await llmFallbackForUncategorizedImports(supabase, userId, statement.id, {
+    await autoApplyCategoriesBatch(userId, insertedIds)
+    await llmFallbackForUncategorizedImports(userId, statement.id, {
       onlyImportIds: insertedIds,
-    });
+    })
   }
 
-  // Update status to imported/parsed so it shows up in review
-  await (supabase as any)
-    .from('statements')
-    .update({ status: 'parsed' }) // 'parsed' status indicates ready for review
-    .eq('id', statement.id);
+  await db
+    .update(statements)
+    .set({ status: 'parsed' })
+    .where(eq(statements.id, statement.id))
+
+  // Invalidate the cached statement list and tx-derived lookups (months, years).
+  revalidateTag(tag.statements(userId), 'default')
+  revalidateTag(tag.tx(userId), 'default')
 
   return {
     success: true,
     statementId: statement.id,
     isDuplicate: false,
     count: importRows.length,
-  };
-} catch (error) {
-  console.error('Error ingesting statement', error);
-  throw error;
-}
+  }
 }

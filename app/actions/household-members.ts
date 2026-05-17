@@ -1,17 +1,18 @@
 'use server'
 
-import { revalidatePath } from 'next/cache'
+import { revalidatePath, revalidateTag, unstable_cache } from 'next/cache'
+import { and, asc, eq, sql } from 'drizzle-orm'
 
-import { createClient } from '@/lib/supabase/server'
-import type { HouseholdMember } from '@/lib/supabase/database.types'
+import { db } from '@/lib/db'
+import { householdMembers, type HouseholdMember } from '@/db/schema'
+import { requireUserId, getUserId } from '@/lib/auth'
+import { tag } from '@/lib/cache/tags'
 
 export type CreateHouseholdMemberInput = {
     name: string
     color?: string | null
 }
 
-// Pages that read the member list. Kept here so revalidation after every
-// mutation hits the same set.
 const MEMBER_REVALIDATE_PATHS = ['/upload', '/transactions', '/insights', '/statements'] as const
 
 function revalidateMemberSurfaces() {
@@ -19,54 +20,51 @@ function revalidateMemberSurfaces() {
 }
 
 export async function getHouseholdMembers(): Promise<HouseholdMember[]> {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return []
-
-    const { data, error } = await supabase
-        .from('household_members')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: true })
-
-    if (error) {
-        console.error('Error fetching household members:', error)
-        return []
-    }
-
-    return (data ?? []) as HouseholdMember[]
+    const userId = await getUserId()
+    if (!userId) return []
+    return unstable_cache(
+        async () => {
+            return db
+                .select()
+                .from(householdMembers)
+                .where(eq(householdMembers.userId, userId))
+                .orderBy(asc(householdMembers.createdAt))
+        },
+        ['household-members', userId],
+        { tags: [tag.members(userId)], revalidate: 3600 },
+    )()
 }
 
 export async function createHouseholdMember(
     input: CreateHouseholdMemberInput,
 ): Promise<HouseholdMember> {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) throw new Error('Unauthorized')
+    const userId = await requireUserId()
 
     const name = input.name.trim()
     if (!name) throw new Error('Member name is required')
 
-    const { data, error } = await supabase
-        .from('household_members')
-        .insert({
-            name,
-            color: input.color ?? null,
-            user_id: user.id,
-        } as any)
-        .select()
-        .single()
+    try {
+        const [row] = await db
+            .insert(householdMembers)
+            .values({
+                userId,
+                name,
+                color: input.color ?? null,
+            })
+            .returning()
 
-    if (error) {
-        if (error.message?.includes('duplicate key') || error.code === '23505') {
+        if (!row) throw new Error('Failed to create household member')
+        revalidateTag(tag.members(userId), 'default')
+        revalidateMemberSurfaces()
+        return row
+    } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e)
+        if (msg.includes('duplicate key') || msg.includes('23505')) {
             throw new Error(`A member named "${name}" already exists`)
         }
-        console.error('Error creating household member:', error)
-        throw new Error(error.message)
+        console.error('Error creating household member')
+        throw new Error(msg)
     }
-
-    revalidateMemberSurfaces()
-    return data as HouseholdMember
 }
 
 // Idempotent variant used during onboarding seeding. Returns the existing
@@ -76,19 +74,24 @@ export async function ensureHouseholdMember(
 ): Promise<HouseholdMember | null> {
     try {
         return await createHouseholdMember(input)
-    } catch (e: any) {
-        if (e?.message?.includes('already exists')) {
-            const supabase = await createClient()
-            const { data: { user } } = await supabase.auth.getUser()
-            if (!user) return null
-            const { data } = await supabase
-                .from('household_members')
-                .select('*')
-                .eq('user_id', user.id)
-                .ilike('name', input.name.trim())
-                .maybeSingle()
-            return (data as HouseholdMember | null) ?? null
-        }
-        throw e
+    } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e)
+        if (!msg.includes('already exists')) throw e
+
+        const userId = await getUserId()
+        if (!userId) return null
+
+        const [existing] = await db
+            .select()
+            .from(householdMembers)
+            .where(
+                and(
+                    eq(householdMembers.userId, userId),
+                    sql`lower(${householdMembers.name}) = lower(${input.name.trim()})`,
+                ),
+            )
+            .limit(1)
+
+        return existing ?? null
     }
 }

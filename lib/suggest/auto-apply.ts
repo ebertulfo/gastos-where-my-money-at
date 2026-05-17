@@ -1,3 +1,12 @@
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm'
+
+import { db } from '@/lib/db'
+import {
+  tags,
+  transactionImports,
+  transactions,
+  userSettings,
+} from '@/db/schema'
 import { embedTexts } from './embed'
 import { getOpenAIClient, LLM_MODEL, estimateLLMCents } from './client'
 import { friendlyCountry } from './locale'
@@ -99,16 +108,15 @@ function isAiPickable(name: string): boolean {
   return !AI_FORBIDDEN_CATEGORY_NAMES.has(name.trim().toLowerCase())
 }
 
+// pgvector accepts a JSON-array-style string; we serialize manually for SQL params.
+function vectorLiteral(v: number[]): string {
+  return `[${v.join(',')}]`
+}
+
 interface AutoApplyResult {
   categoryId: string
   signal: 'knn' | 'tag-embed' | 'llm'
   similarity: number
-}
-
-interface ImportRow {
-  id: string
-  description: string
-  user_id: string
 }
 
 /**
@@ -124,84 +132,74 @@ interface ImportRow {
  * while the user is on the review screen.
  */
 export async function autoApplyCategoriesBatch(
-  supabase: any,
   userId: string,
   importIds: string[],
 ): Promise<{ categorized: number; flaggedAsTravel: number }> {
   if (importIds.length === 0) return { categorized: 0, flaggedAsTravel: 0 }
 
   try {
-    const { data, error } = await supabase
-      .from('transaction_imports')
-      .select('id, description')
-      .in('id', importIds)
-    if (error || !data) return { categorized: 0, flaggedAsTravel: 0 }
-    const rows = (data as { id: string; description: string }[])
-      .filter(r => r.description && r.description.length > 0)
-    if (rows.length === 0) return { categorized: 0, flaggedAsTravel: 0 }
+    const rows = await db
+      .select({ id: transactionImports.id, description: transactionImports.description })
+      .from(transactionImports)
+      .where(inArray(transactionImports.id, importIds))
+    const usable = rows.filter(r => r.description && r.description.length > 0)
+    if (usable.length === 0) return { categorized: 0, flaggedAsTravel: 0 }
 
     // 0. Resolve home currency once for the foreign-token filter.
-    const { data: settings } = await supabase
-      .from('user_settings')
-      .select('currency')
-      .eq('user_id', userId)
-      .maybeSingle()
-    const homeCurrency = ((settings as { currency?: string } | null)?.currency ?? '').toUpperCase() || null
+    const [settings] = await db
+      .select({ currency: userSettings.currency })
+      .from(userSettings)
+      .where(eq(userSettings.userId, userId))
+      .limit(1)
+    const homeCurrency = (settings?.currency ?? '').toUpperCase() || null
 
     // 1. Detect is_travel from the description before any AI work — purely
     // lexical, deterministic, free.
     const travelFlags = new Map<string, boolean>(
-      rows.map(r => [r.id, detectIsTravel(r.description, homeCurrency)]),
+      usable.map(r => [r.id, detectIsTravel(r.description, homeCurrency)]),
     )
-    const travelRows = rows.filter(r => travelFlags.get(r.id))
-    if (travelRows.length > 0) {
-      await Promise.all(
-        travelRows.map(r =>
-          supabase
-            .from('transaction_imports')
-            .update({ is_travel: true })
-            .eq('id', r.id),
-        ),
-      )
+    const travelIds = usable.filter(r => travelFlags.get(r.id)).map(r => r.id)
+    if (travelIds.length > 0) {
+      await db
+        .update(transactionImports)
+        .set({ isTravel: true })
+        .where(inArray(transactionImports.id, travelIds))
     }
 
     // 2. Embed all descriptions in one OpenAI call. Persist on the import row
     // so the suggestion path doesn't need to re-embed.
-    const embedResult = await embedTexts(rows.map(r => r.description))
-    if (!embedResult || embedResult.embeddings.length !== rows.length) {
-      return { categorized: 0, flaggedAsTravel: travelRows.length }
+    const embedResult = await embedTexts(usable.map(r => r.description))
+    if (!embedResult || embedResult.embeddings.length !== usable.length) {
+      return { categorized: 0, flaggedAsTravel: travelIds.length }
     }
 
     // Persist embeddings (parallel updates).
     await Promise.all(
-      rows.map((row, i) =>
-        supabase
-          .from('transaction_imports')
-          .update({ description_embedding: embedResult.embeddings[i] as any })
-          .eq('id', row.id),
+      usable.map((row, i) =>
+        db
+          .update(transactionImports)
+          .set({ descriptionEmbedding: embedResult.embeddings[i] })
+          .where(eq(transactionImports.id, row.id)),
       ),
     )
 
     // 3. Resolve which categories AI must not auto-apply (e.g. "Other" —
     // a polite-empty answer that's identical to leaving the row uncategorized).
-    const { data: catsForBlocklist } = await supabase
-      .from('tags')
-      .select('id, name')
-      .eq('user_id', userId)
-      .eq('kind', 'category')
+    const catsForBlocklist = await db
+      .select({ id: tags.id, name: tags.name })
+      .from(tags)
+      .where(and(eq(tags.userId, userId), eq(tags.kind, 'category')))
     const blockedCategoryIds = new Set(
-      ((catsForBlocklist ?? []) as { id: string; name: string }[])
-        .filter(c => !isAiPickable(c.name))
-        .map(c => c.id),
+      catsForBlocklist.filter(c => !isAiPickable(c.name)).map(c => c.id),
     )
 
     // 4. For each row, run KNN + tag-embed in parallel, decide.
     const decisions: { id: string; categoryId: string }[] = []
     await Promise.all(
-      rows.map(async (row, i) => {
+      usable.map(async (row, i) => {
         const embedding = embedResult.embeddings[i]
         const decision = await decideCategoryForEmbedding(
-          supabase, userId, row.id, embedding, blockedCategoryIds,
+          userId, row.id, embedding, blockedCategoryIds,
         )
         if (decision) {
           decisions.push({ id: row.id, categoryId: decision.categoryId })
@@ -210,19 +208,19 @@ export async function autoApplyCategoriesBatch(
     )
 
     if (decisions.length === 0) {
-      return { categorized: 0, flaggedAsTravel: travelRows.length }
+      return { categorized: 0, flaggedAsTravel: travelIds.length }
     }
 
-    // 4. Apply decisions in parallel.
+    // 5. Apply decisions in parallel.
     await Promise.all(
       decisions.map(d =>
-        supabase
-          .from('transaction_imports')
-          .update({ category_id: d.categoryId, category_source: 'ai' })
-          .eq('id', d.id),
+        db
+          .update(transactionImports)
+          .set({ categoryId: d.categoryId, categorySource: 'ai' })
+          .where(eq(transactionImports.id, d.id)),
       ),
     )
-    return { categorized: decisions.length, flaggedAsTravel: travelRows.length }
+    return { categorized: decisions.length, flaggedAsTravel: travelIds.length }
   } catch (err) {
     console.warn('autoApplyCategoriesBatch failed', err)
     return { categorized: 0, flaggedAsTravel: 0 }
@@ -236,15 +234,14 @@ export async function autoApplyCategoriesBatch(
  * wire it.
  */
 export async function decideCategoryForEmbedding(
-  supabase: any,
   userId: string,
   excludeId: string | null,
   embedding: number[],
   blockedCategoryIds: ReadonlySet<string> = new Set(),
 ): Promise<AutoApplyResult | null> {
   const [knnResultRaw, tagEmbedResultRaw] = await Promise.all([
-    knnVote(supabase, userId, excludeId, embedding),
-    knnNearestCategories(supabase, userId, embedding),
+    knnVote(userId, excludeId, embedding),
+    knnNearestCategories(userId, embedding),
   ])
 
   const knnResult = knnResultRaw.filter(v => !blockedCategoryIds.has(v.categoryId))
@@ -254,7 +251,7 @@ export async function decideCategoryForEmbedding(
   if (knnResult.length > 0) {
     const top = knnResult[0]
     if (top.votes >= KNN_MIN_VOTES_FOR_AUTO && top.topSim >= KNN_STRONG_SIMILARITY) {
-      const collapsed = await collapseToChildIfPresent(supabase, userId, knnResult, top)
+      const collapsed = await collapseToChildIfPresent(userId, knnResult, top)
       return { categoryId: collapsed, signal: 'knn', similarity: top.topSim }
     }
   }
@@ -275,22 +272,31 @@ interface KNNVote {
   topSim: number
 }
 
+interface KnnNeighbourCategoryRow {
+  id: string
+  description: string
+  similarity: number
+  category_id: string | null
+}
+
 async function knnVote(
-  supabase: any,
   userId: string,
   excludeId: string | null,
   embedding: number[],
 ): Promise<KNNVote[]> {
-  const { data, error } = await supabase.rpc('knn_neighbour_categories_for_imports', {
-    p_user_id: userId,
-    p_exclude_id: excludeId,
-    p_embedding: embedding as unknown as string,
-    p_limit: KNN_LIMIT,
-  })
-  if (error || !data) return []
+  let rows: KnnNeighbourCategoryRow[] = []
+  try {
+    const result = await db.execute(
+      sql`select * from knn_neighbour_categories_for_imports(${userId}, ${excludeId}::uuid, ${vectorLiteral(embedding)}::vector(1536), ${KNN_LIMIT})`,
+    )
+    rows = ((result as unknown as { rows?: KnnNeighbourCategoryRow[] }).rows
+      ?? (result as unknown as KnnNeighbourCategoryRow[]))
+  } catch {
+    return []
+  }
 
   const tally = new Map<string, { votes: number; topSim: number }>()
-  for (const row of data as { category_id: string; similarity: number }[]) {
+  for (const row of rows) {
     if (!row.category_id) continue
     if (row.similarity < KNN_STRONG_SIMILARITY) continue
     const existing = tally.get(row.category_id)
@@ -314,17 +320,19 @@ interface NearestCategory {
 }
 
 async function knnNearestCategories(
-  supabase: any,
   userId: string,
   embedding: number[],
 ): Promise<NearestCategory[]> {
-  const { data, error } = await supabase.rpc('knn_nearest_categories', {
-    p_user_id: userId,
-    p_embedding: embedding as unknown as string,
-    p_limit: TAG_EMBED_LIMIT,
-  })
-  if (error || !data) return []
-  return data as NearestCategory[]
+  try {
+    const result = await db.execute(
+      sql`select * from knn_nearest_categories(${userId}, ${vectorLiteral(embedding)}::vector(1536), ${TAG_EMBED_LIMIT})`,
+    )
+    const rows = ((result as unknown as { rows?: NearestCategory[] }).rows
+      ?? (result as unknown as NearestCategory[]))
+    return rows
+  } catch {
+    return []
+  }
 }
 
 /**
@@ -333,22 +341,18 @@ async function knnNearestCategories(
  * principle: most-specific wins.
  */
 async function collapseToChildIfPresent(
-  supabase: any,
   userId: string,
   votes: KNNVote[],
   top: KNNVote,
 ): Promise<string> {
   const candidateIds = votes.map(v => v.categoryId)
   if (candidateIds.length === 0) return top.categoryId
-  const { data } = await supabase
-    .from('tags')
-    .select('id, parent_id')
-    .eq('user_id', userId)
-    .in('id', candidateIds)
-  if (!data) return top.categoryId
+  const rows = await db
+    .select({ id: tags.id, parentId: tags.parentId })
+    .from(tags)
+    .where(and(eq(tags.userId, userId), inArray(tags.id, candidateIds)))
 
-  const child = (data as { id: string; parent_id: string | null }[])
-    .find(t => t.parent_id === top.categoryId)
+  const child = rows.find(t => t.parentId === top.categoryId)
   return child ? child.id : top.categoryId
 }
 
@@ -385,7 +389,7 @@ interface CategoryNode {
 interface BatchInput {
   id: string
   description: string
-  amount: number
+  amount: number | string
   date: string
 }
 
@@ -525,7 +529,6 @@ ${JSON.stringify(batch.map(r => ({ id: r.id, description: r.description, amount:
  * to "stay uncategorized" when budget is hit.
  */
 export async function llmFallbackForUncategorizedImports(
-  supabase: any,
   userId: string,
   statementId: string,
   options: { onlyImportIds?: string[] } = {},
@@ -534,34 +537,42 @@ export async function llmFallbackForUncategorizedImports(
     const client = getOpenAIClient()
     if (!client) return { categorized: 0, attempted: 0, budgetExhausted: false }
 
-    let rowQuery = supabase
-      .from('transaction_imports')
-      .select('id, description, amount, date')
-      .eq('statement_id', statementId)
-      .is('category_id', null)
-    if (options.onlyImportIds && options.onlyImportIds.length > 0) {
-      rowQuery = rowQuery.in('id', options.onlyImportIds)
-    }
-    const { data: rowsData } = await rowQuery
-    const rows = (rowsData ?? []) as BatchInput[]
+    const onlyIds = options.onlyImportIds ?? []
+    const whereClause = onlyIds.length > 0
+      ? and(
+          eq(transactionImports.statementId, statementId),
+          isNull(transactionImports.categoryId),
+          inArray(transactionImports.id, onlyIds),
+        )
+      : and(
+          eq(transactionImports.statementId, statementId),
+          isNull(transactionImports.categoryId),
+        )
+
+    const rows = (await db
+      .select({
+        id: transactionImports.id,
+        description: transactionImports.description,
+        amount: transactionImports.amount,
+        date: transactionImports.date,
+      })
+      .from(transactionImports)
+      .where(whereClause)) as BatchInput[]
     if (rows.length === 0) return { categorized: 0, attempted: 0, budgetExhausted: false }
 
-    const { data: catsData } = await supabase
-      .from('tags')
-      .select('id, name, parent_id')
-      .eq('user_id', userId)
-      .eq('kind', 'category')
-    const categories = (catsData ?? []) as CategoryNode[]
+    const categories = await db
+      .select({ id: tags.id, name: tags.name, parent_id: tags.parentId })
+      .from(tags)
+      .where(and(eq(tags.userId, userId), eq(tags.kind, 'category')))
     if (categories.length === 0) return { categorized: 0, attempted: 0, budgetExhausted: false }
 
-    const { data: settings } = await supabase
-      .from('user_settings')
-      .select('country, currency')
-      .eq('user_id', userId)
-      .maybeSingle()
-    const settingsRow = settings as { country?: string; currency?: string } | null
-    const country = friendlyCountry(settingsRow?.country ?? null)
-    const homeCurrency = (settingsRow?.currency ?? '').toUpperCase() || null
+    const [settings] = await db
+      .select({ country: userSettings.country, currency: userSettings.currency })
+      .from(userSettings)
+      .where(eq(userSettings.userId, userId))
+      .limit(1)
+    const country = friendlyCountry(settings?.country ?? null)
+    const homeCurrency = (settings?.currency ?? '').toUpperCase() || null
 
     const { assignments, budgetExhausted } = await llmBatchCategorize({
       client, country, homeCurrency, rows, categories, userId,
@@ -570,10 +581,10 @@ export async function llmFallbackForUncategorizedImports(
     if (assignments.size > 0) {
       await Promise.all(
         Array.from(assignments.entries()).map(([id, categoryId]) =>
-          supabase
-            .from('transaction_imports')
-            .update({ category_id: categoryId, category_source: 'ai' })
-            .eq('id', id),
+          db
+            .update(transactionImports)
+            .set({ categoryId, categorySource: 'ai' })
+            .where(eq(transactionImports.id, id)),
         ),
       )
     }
@@ -593,38 +604,42 @@ export async function llmFallbackForUncategorizedImports(
  * Picks from the user's full category vocabulary.
  */
 export async function recategorizeUncategorizedTransactions(
-  supabase: any,
   userId: string,
 ): Promise<{ categorized: number; attempted: number; budgetExhausted: boolean }> {
   try {
     const client = getOpenAIClient()
     if (!client) return { categorized: 0, attempted: 0, budgetExhausted: false }
 
-    const { data: rowsData } = await supabase
-      .from('transactions')
-      .select('id, description, amount, date')
-      .eq('user_id', userId)
-      .is('category_id', null)
-      .eq('status', 'active')
-    const rows = (rowsData ?? []) as BatchInput[]
+    const rows = (await db
+      .select({
+        id: transactions.id,
+        description: transactions.description,
+        amount: transactions.amount,
+        date: transactions.date,
+      })
+      .from(transactions)
+      .where(
+        and(
+          eq(transactions.userId, userId),
+          isNull(transactions.categoryId),
+          eq(transactions.status, 'active'),
+        ),
+      )) as BatchInput[]
     if (rows.length === 0) return { categorized: 0, attempted: 0, budgetExhausted: false }
 
-    const { data: catsData } = await supabase
-      .from('tags')
-      .select('id, name, parent_id')
-      .eq('user_id', userId)
-      .eq('kind', 'category')
-    const categories = (catsData ?? []) as CategoryNode[]
+    const categories = await db
+      .select({ id: tags.id, name: tags.name, parent_id: tags.parentId })
+      .from(tags)
+      .where(and(eq(tags.userId, userId), eq(tags.kind, 'category')))
     if (categories.length === 0) return { categorized: 0, attempted: 0, budgetExhausted: false }
 
-    const { data: settings } = await supabase
-      .from('user_settings')
-      .select('country, currency')
-      .eq('user_id', userId)
-      .maybeSingle()
-    const settingsRow = settings as { country?: string; currency?: string } | null
-    const country = friendlyCountry(settingsRow?.country ?? null)
-    const homeCurrency = (settingsRow?.currency ?? '').toUpperCase() || null
+    const [settings] = await db
+      .select({ country: userSettings.country, currency: userSettings.currency })
+      .from(userSettings)
+      .where(eq(userSettings.userId, userId))
+      .limit(1)
+    const country = friendlyCountry(settings?.country ?? null)
+    const homeCurrency = (settings?.currency ?? '').toUpperCase() || null
 
     const { assignments, budgetExhausted } = await llmBatchCategorize({
       client, country, homeCurrency, rows, categories, userId,
@@ -633,10 +648,10 @@ export async function recategorizeUncategorizedTransactions(
     if (assignments.size > 0) {
       await Promise.all(
         Array.from(assignments.entries()).map(([id, categoryId]) =>
-          supabase
-            .from('transactions')
-            .update({ category_id: categoryId, category_source: 'ai' })
-            .eq('id', id),
+          db
+            .update(transactions)
+            .set({ categoryId, categorySource: 'ai' })
+            .where(eq(transactions.id, id)),
         ),
       )
     }
@@ -667,4 +682,3 @@ function renderCategoryVocabulary(categories: CategoryNode[]): string {
   }
   return lines.join('\n')
 }
-

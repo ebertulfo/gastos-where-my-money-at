@@ -1,7 +1,11 @@
 'use server'
 
-import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
+import { eq } from 'drizzle-orm'
+
+import { db } from '@/lib/db'
+import { userSettings } from '@/db/schema'
+import { requireUserId, getUserId } from '@/lib/auth'
 
 export type UserSettings = {
     user_id: string
@@ -12,58 +16,46 @@ export type UserSettings = {
 }
 
 export async function getSettings() {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
+    const userId = await getUserId()
+    if (!userId) return null
 
-    if (!user) {
-        console.log('getSettings: No user found')
-        return null
-    }
+    const [row] = await db
+        .select()
+        .from(userSettings)
+        .where(eq(userSettings.userId, userId))
+        .limit(1)
 
-    const { data, error } = await supabase
-        .from('user_settings')
-        .select('*')
-        .eq('user_id', user.id)
-        .single()
+    if (!row) return null
 
-    if (error && error.code !== 'PGRST116') { // PGRST116 is "No rows found"
-        console.error('getSettings: Error fetching settings:', error)
-        return null
-    }
-
-    if (!data) {
-        console.log('getSettings: No settings found for user', user.id)
-    } else {
-        console.log('getSettings: Settings found', data)
-    }
-
-    return data as UserSettings | null
+    return {
+        user_id: row.userId,
+        currency: row.currency,
+        country: row.country,
+        created_at: row.createdAt.toISOString(),
+        updated_at: row.updatedAt.toISOString(),
+    } as UserSettings
 }
 
 export async function updateSettings(input: { currency?: string; country?: string }) {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
+    const userId = await requireUserId()
 
-    if (!user) throw new Error('Unauthorized')
-
-    const payload: Record<string, unknown> = {
-        user_id: user.id,
-        updated_at: new Date().toISOString(),
+    const update: { currency?: string; country?: string; updatedAt: Date } = {
+        updatedAt: new Date(),
     }
-    if (input.currency !== undefined) payload.currency = input.currency
-    if (input.country !== undefined) payload.country = input.country
+    if (input.currency !== undefined) update.currency = input.currency
+    if (input.country !== undefined) update.country = input.country
 
-    // Default currency on first creation if neither side provided one.
-    if (!('currency' in payload)) payload.currency = 'SGD'
-
-    const { error: upsertError } = await (supabase
-        .from('user_settings' as any) as any)
-        .upsert(payload, { onConflict: 'user_id' })
-
-    if (upsertError) {
-        console.error('Error updating settings:', upsertError)
-        throw new Error(upsertError.message)
-    }
+    await db
+        .insert(userSettings)
+        .values({
+            userId,
+            currency: input.currency ?? 'SGD',
+            country: input.country ?? 'SG',
+        })
+        .onConflictDoUpdate({
+            target: userSettings.userId,
+            set: update,
+        })
 
     revalidatePath('/upload')
     revalidatePath('/insights')

@@ -1,21 +1,29 @@
 'use server'
 
 import { after } from 'next/server'
-import { revalidatePath } from 'next/cache'
-import { createClient } from '@/lib/supabase/server'
+import { revalidatePath, revalidateTag, unstable_cache } from 'next/cache'
+import { and, asc, eq, isNull, sql } from 'drizzle-orm'
+
+import { db } from '@/lib/db'
+import { tags, transactions, transactionImports, userSettings } from '@/db/schema'
+import { requireUserId } from '@/lib/auth'
 import { embedTags, embedTransactions } from '@/lib/suggest/embed'
-import { seedCategoriesForUser } from '@/lib/categories/seed'
 import { recategorizeUncategorizedTransactions } from '@/lib/suggest/auto-apply'
+import { seedCategoriesForUser } from '@/lib/categories/seed'
+import { tag as cacheTag } from '@/lib/cache/tags'
 
 // Category mutations affect transactions, insights, and the review surface
 // (since AI-applied categories also live there). Keep these in sync.
-function revalidateCategorySurfaces() {
+// Pass `userId` when the *category list itself* changed (create/rename/delete)
+// so the cached getCategories() reads invalidate too.
+function revalidateCategorySurfaces(userId?: string) {
   revalidatePath('/transactions')
   revalidatePath('/insights')
   revalidatePath('/summary')
   revalidatePath('/upload')
   revalidatePath('/settings/categories')
   revalidatePath('/imports/[statementId]/review', 'page')
+  if (userId) revalidateTag(cacheTag.categories(userId), 'default')
 }
 
 function normalizeCategoryName(name: string): string {
@@ -30,103 +38,108 @@ export interface CategoryRow {
   color: string | null
 }
 
+function toCategoryRow(t: {
+  id: string
+  name: string
+  description: string | null
+  parentId: string | null
+  color: string | null
+}): CategoryRow {
+  return {
+    id: t.id,
+    name: t.name,
+    description: t.description,
+    parent_id: t.parentId,
+    color: t.color,
+  }
+}
+
 // ---------- Read ----------
 
 export async function getCategories(): Promise<CategoryRow[]> {
-  const supabase = await createClient()
-  const { data, error } = await supabase
-    .from('tags')
-    .select('id, name, description, parent_id, color')
-    .eq('kind', 'category')
-    .order('name')
-
-  if (error) {
-    console.error('Error fetching categories:', error)
-    return []
-  }
-  return (data ?? []) as CategoryRow[]
+  const userId = await requireUserId()
+  return unstable_cache(
+    async () => {
+      const rows = await db
+        .select({
+          id: tags.id,
+          name: tags.name,
+          description: tags.description,
+          parentId: tags.parentId,
+          color: tags.color,
+        })
+        .from(tags)
+        .where(and(eq(tags.userId, userId), eq(tags.kind, 'category')))
+        .orderBy(asc(tags.name))
+      return rows.map(toCategoryRow)
+    },
+    ['user-categories', userId],
+    { tags: [cacheTag.categories(userId)], revalidate: 3600 },
+  )()
 }
 
 // ---------- Per-transaction assignment ----------
 
-/**
- * User chose a category from the picker. Always stamps source='user'.
- * Pass categoryId=null to clear (use clearTransactionCategory for clarity).
- */
 export async function setTransactionCategory(
   transactionId: string,
   categoryId: string | null,
 ): Promise<void> {
-  const supabase = await createClient()
-  const { error } = await supabase
-    .from('transactions')
-    .update({
-      category_id: categoryId,
-      category_source: categoryId ? 'user' : null,
-    } as any)
-    .eq('id', transactionId)
-  if (error) throw new Error(error.message)
+  await requireUserId()
+  await db
+    .update(transactions)
+    .set({
+      categoryId,
+      categorySource: categoryId ? 'user' : null,
+    })
+    .where(eq(transactions.id, transactionId))
   revalidateCategorySurfaces()
 }
 
-/**
- * Confirm an AI-applied category — flips source from 'ai' to 'user'.
- * Used by the ✓ control on the AI-styled pill.
- */
 export async function confirmAiCategory(transactionId: string): Promise<void> {
-  const supabase = await createClient()
-  const { error } = await supabase
-    .from('transactions')
-    .update({ category_source: 'user' } as any)
-    .eq('id', transactionId)
-    .eq('category_source', 'ai')
-  if (error) throw new Error(error.message)
+  await requireUserId()
+  await db
+    .update(transactions)
+    .set({ categorySource: 'user' })
+    .where(and(eq(transactions.id, transactionId), eq(transactions.categorySource, 'ai')))
   revalidateCategorySurfaces()
 }
 
 export async function clearTransactionCategory(transactionId: string): Promise<void> {
-  const supabase = await createClient()
-  const { error } = await supabase
-    .from('transactions')
-    .update({ category_id: null, category_source: null } as any)
-    .eq('id', transactionId)
-  if (error) throw new Error(error.message)
+  await requireUserId()
+  await db
+    .update(transactions)
+    .set({ categoryId: null, categorySource: null })
+    .where(eq(transactions.id, transactionId))
   revalidateCategorySurfaces()
 }
 
-// Same three actions but operating on staging (transaction_imports) so the
-// review screen can confirm/clear/override AI picks before promote.
 export async function setImportCategory(importId: string, categoryId: string | null): Promise<void> {
-  const supabase = await createClient()
-  const { error } = await supabase
-    .from('transaction_imports')
-    .update({
-      category_id: categoryId,
-      category_source: categoryId ? 'user' : null,
-    } as any)
-    .eq('id', importId)
-  if (error) throw new Error(error.message)
+  await requireUserId()
+  await db
+    .update(transactionImports)
+    .set({
+      categoryId,
+      categorySource: categoryId ? 'user' : null,
+    })
+    .where(eq(transactionImports.id, importId))
   revalidateCategorySurfaces()
 }
 
 export async function confirmAiImportCategory(importId: string): Promise<void> {
-  const supabase = await createClient()
-  const { error } = await supabase
-    .from('transaction_imports')
-    .update({ category_source: 'user' } as any)
-    .eq('id', importId)
-    .eq('category_source', 'ai')
-  if (error) throw new Error(error.message)
+  await requireUserId()
+  await db
+    .update(transactionImports)
+    .set({ categorySource: 'user' })
+    .where(and(eq(transactionImports.id, importId), eq(transactionImports.categorySource, 'ai')))
   revalidateCategorySurfaces()
 }
 
 export async function clearImportCategory(importId: string): Promise<void> {
-  const supabase = await createClient()
-  const { error } = await supabase
-    .from('transaction_imports')
-    .update({ category_id: null, category_source: null } as any)
-    .eq('id', importId)
-  if (error) throw new Error(error.message)
+  await requireUserId()
+  await db
+    .update(transactionImports)
+    .set({ categoryId: null, categorySource: null })
+    .where(eq(transactionImports.id, importId))
   revalidateCategorySurfaces()
 }
 
@@ -140,87 +153,102 @@ export interface CreateCategoryInput {
 }
 
 export async function createCategory(input: CreateCategoryInput): Promise<CategoryRow> {
-  const supabase = await createClient()
-  const { data: userData } = await supabase.auth.getUser()
-  if (!userData.user) throw new Error('Unauthorized')
+  const userId = await requireUserId()
 
   const name = normalizeCategoryName(input.name)
   if (!name) throw new Error('Category name is required')
 
-  const { data, error } = await supabase
-    .from('tags')
-    .insert({
+  const [row] = await db
+    .insert(tags)
+    .values({
+      userId,
       name,
-      parent_id: input.parentId ?? null,
+      parentId: input.parentId ?? null,
       description: input.description ?? null,
       color: input.color ?? null,
       kind: 'category',
-      user_id: userData.user.id,
-    } as any)
-    .select('id, name, description, parent_id, color')
-    .single()
+    })
+    .returning({
+      id: tags.id,
+      name: tags.name,
+      description: tags.description,
+      parentId: tags.parentId,
+      color: tags.color,
+    })
 
-  if (error) throw new Error(error.message)
+  if (!row) throw new Error('Failed to create category')
 
-  // Embed the new category so it joins KNN/tag-embed matching as soon as
-  // possible. If description is empty, embedding is name-only — still useful.
   after(async () => {
-    await embedTags(supabase, [(data as any).id])
+    await embedTags([row.id])
   })
 
-  revalidateCategorySurfaces()
-  return data as CategoryRow
+  revalidateCategorySurfaces(userId)
+  return toCategoryRow(row)
 }
 
 export async function renameCategory(id: string, newName: string): Promise<CategoryRow> {
-  const supabase = await createClient()
+  const userId = await requireUserId()
   const name = normalizeCategoryName(newName)
   if (!name) throw new Error('Category name is required')
 
-  const { data, error } = await supabase
-    .from('tags')
-    .update({ name } as any)
-    .eq('id', id)
-    .eq('kind', 'category')
-    .select('id, name, description, parent_id, color')
-    .single()
-  if (error) throw new Error(error.message)
+  const [row] = await db
+    .update(tags)
+    .set({ name })
+    .where(and(eq(tags.id, id), eq(tags.kind, 'category')))
+    .returning({
+      id: tags.id,
+      name: tags.name,
+      description: tags.description,
+      parentId: tags.parentId,
+      color: tags.color,
+    })
+
+  if (!row) throw new Error('Category not found')
 
   after(async () => {
-    await embedTags(supabase, [id])
+    await embedTags([id])
   })
 
-  revalidateCategorySurfaces()
-  return data as CategoryRow
+  revalidateCategorySurfaces(userId)
+  return toCategoryRow(row)
 }
 
 export async function updateCategory(
   id: string,
   patch: { description?: string | null; color?: string | null; parentId?: string | null },
 ): Promise<CategoryRow> {
-  const supabase = await createClient()
-  const updates: any = {}
+  const userId = await requireUserId()
+  const updates: Partial<{
+    description: string | null
+    color: string | null
+    parentId: string | null
+  }> = {}
   if (patch.description !== undefined) updates.description = patch.description
   if (patch.color !== undefined) updates.color = patch.color
-  if (patch.parentId !== undefined) updates.parent_id = patch.parentId
+  if (patch.parentId !== undefined) updates.parentId = patch.parentId
 
-  const { data, error } = await supabase
-    .from('tags')
-    .update(updates)
-    .eq('id', id)
-    .eq('kind', 'category')
-    .select('id, name, description, parent_id, color')
-    .single()
-  if (error) throw new Error(error.message)
+  const [row] = await db
+    .update(tags)
+    .set(updates)
+    .where(and(eq(tags.id, id), eq(tags.kind, 'category')))
+    .returning({
+      id: tags.id,
+      name: tags.name,
+      description: tags.description,
+      parentId: tags.parentId,
+      color: tags.color,
+    })
+
+  if (!row) throw new Error('Category not found')
 
   if (patch.description !== undefined) {
     after(async () => {
-      await embedTags(supabase, [id])
+      await embedTags([id])
     })
   }
 
-  revalidateCategorySurfaces()
-  return data as CategoryRow
+  revalidateCategorySurfaces(userId)
+  return toCategoryRow(row)
 }
 
 /**
@@ -229,96 +257,84 @@ export async function updateCategory(
  * NULL — they become new top-levels.
  */
 export async function deleteCategory(id: string): Promise<void> {
-  const supabase = await createClient()
+  const userId = await requireUserId()
 
-  const { data: target } = await supabase
-    .from('tags')
-    .select('parent_id')
-    .eq('id', id)
-    .eq('kind', 'category')
-    .maybeSingle()
-  const newParentForTransactions = (target as { parent_id: string | null } | null)?.parent_id ?? null
+  const [target] = await db
+    .select({ parentId: tags.parentId })
+    .from(tags)
+    .where(and(eq(tags.id, id), eq(tags.kind, 'category')))
+    .limit(1)
+  const newParent = target?.parentId ?? null
 
-  // Reassign transactions and imports.
-  await supabase
-    .from('transactions')
-    .update({ category_id: newParentForTransactions } as any)
-    .eq('category_id', id)
-  await supabase
-    .from('transaction_imports')
-    .update({ category_id: newParentForTransactions } as any)
-    .eq('category_id', id)
+  await db
+    .update(transactions)
+    .set({ categoryId: newParent })
+    .where(eq(transactions.categoryId, id))
 
-  // Re-parent children to NULL — they become top-level.
-  await supabase
-    .from('tags')
-    .update({ parent_id: null } as any)
-    .eq('parent_id', id)
-    .eq('kind', 'category')
+  await db
+    .update(transactionImports)
+    .set({ categoryId: newParent })
+    .where(eq(transactionImports.categoryId, id))
 
-  const { error } = await supabase
-    .from('tags')
-    .delete()
-    .eq('id', id)
-    .eq('kind', 'category')
-  if (error) throw new Error(error.message)
+  await db
+    .update(tags)
+    .set({ parentId: null })
+    .where(and(eq(tags.parentId, id), eq(tags.kind, 'category')))
 
-  revalidateCategorySurfaces()
+  await db
+    .delete(tags)
+    .where(and(eq(tags.id, id), eq(tags.kind, 'category')))
+
+  revalidateCategorySurfaces(userId)
 }
 
 /**
  * Re-runs LLM categorization for any of the user's transactions still
- * uncategorized. Useful after a model / prompt upgrade — existing data
- * stays untouched until this is invoked. Embeds rows that lack a
- * description_embedding so KNN/tag-embed signals warm up too. Budgeted via
- * the existing user_settings.ai_monthly_budget_cents path.
+ * uncategorized. Embeds anything missing an embedding first, then asks
+ * `recategorizeUncategorizedTransactions` to fill in category_id.
  */
 export async function recategorizeUncategorized(): Promise<{
   categorized: number
   attempted: number
   budgetExhausted: boolean
 }> {
-  const supabase = await createClient()
-  const { data: userData } = await supabase.auth.getUser()
-  if (!userData.user) throw new Error('Unauthorized')
-  const userId = userData.user.id
+  const userId = await requireUserId()
 
-  // Backfill missing embeddings first so KNN / tag-embed have signal once
-  // the LLM lands category_id values.
-  const { data: missingEmbed } = await supabase
-    .from('transactions')
-    .select('id')
-    .eq('user_id', userId)
-    .is('description_embedding', null)
-    .eq('status', 'active')
+  const missingEmbed = await db
+    .select({ id: transactions.id })
+    .from(transactions)
+    .where(
+      and(
+        eq(transactions.userId, userId),
+        isNull(transactions.descriptionEmbedding),
+        eq(transactions.status, 'active'),
+      ),
+    )
     .limit(2000)
-  const missingIds = ((missingEmbed ?? []) as { id: string }[]).map(r => r.id)
-  if (missingIds.length > 0) {
-    await embedTransactions(supabase, missingIds)
+
+  if (missingEmbed.length > 0) {
+    await embedTransactions(missingEmbed.map(r => r.id))
   }
 
-  const result = await recategorizeUncategorizedTransactions(supabase, userId)
+  const result = await recategorizeUncategorizedTransactions(userId)
   revalidateCategorySurfaces()
   return result
 }
 
 /**
- * Re-runs the country seed for the current user. Idempotent: only inserts
- * names the user is missing. Does not modify renamed categories.
+ * Re-runs the country seed for the current user. Idempotent.
  */
 export async function restoreDefaultCategories(): Promise<{ inserted: number; skipped: number }> {
-  const supabase = await createClient()
-  const { data: userData } = await supabase.auth.getUser()
-  if (!userData.user) throw new Error('Unauthorized')
+  const userId = await requireUserId()
 
-  const { data: settings } = await supabase
-    .from('user_settings')
-    .select('country')
-    .eq('user_id', userData.user.id)
-    .maybeSingle()
-  const country = (settings as { country?: string } | null)?.country ?? 'default'
+  const [settings] = await db
+    .select({ country: userSettings.country })
+    .from(userSettings)
+    .where(eq(userSettings.userId, userId))
+    .limit(1)
+  const country = settings?.country ?? 'default'
 
-  const result = await seedCategoriesForUser(supabase, userData.user.id, country)
-  revalidateCategorySurfaces()
+  const result = await seedCategoriesForUser(userId, country)
+  revalidateCategorySurfaces(userId)
   return result
 }
