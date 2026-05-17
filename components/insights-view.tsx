@@ -11,13 +11,16 @@ import {
     SelectValue,
 } from '@/components/ui/select'
 import type { Insights, InsightsPeriod, InsightsTravelMode } from '@/lib/types/insights'
-import type { Tag } from '@/lib/supabase/database.types'
+import type { Tag } from '@/db/schema'
 import type { CategoryOption } from '@/components/category-picker'
 import { CategoryDetailDialog } from '@/components/category-detail-dialog'
-import { cn, formatCurrency } from '@/lib/utils'
+import { TripDetectionDialog } from '@/components/trip-detection-dialog'
+import type { TripBreakdownRow } from '@/app/actions/trips'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { Loader2, Plane } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useTransition } from 'react'
 
 const STORAGE_KEY = 'gastos.insights-last-period'
 
@@ -32,6 +35,7 @@ interface InsightsViewProps {
     travelMode: InsightsTravelMode
     availableTags: Tag[]
     availableCategories: CategoryOption[]
+    tripBreakdown: TripBreakdownRow[]
 }
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -53,15 +57,41 @@ export function InsightsView({
     travelMode,
     availableTags,
     availableCategories,
+    tripBreakdown,
 }: InsightsViewProps) {
     const [drillCategory, setDrillCategory] = useState<{
         id: string | null
         name: string
         amount: number
     } | null>(null)
+    const [isDetectTripsOpen, setIsDetectTripsOpen] = useState(false)
     const router = useRouter()
     const pathname = usePathname()
     const searchParams = useSearchParams()
+    const [isPending, startTransition] = useTransition()
+
+    // Optimistic filter state. While a navigation transition is pending we
+    // render these as if they're already the active value, so the clicked
+    // button highlights immediately + shows a spinner. Once the transition
+    // finishes we drop back to the server-derived props.
+    const [optimisticPeriodType, setOptimisticPeriodType] = useState<InsightsPeriod['type'] | null>(null)
+    const [optimisticPeriodValue, setOptimisticPeriodValue] = useState<string | null>(null)
+    const [optimisticTravelMode, setOptimisticTravelMode] = useState<InsightsTravelMode | null>(null)
+
+    useEffect(() => {
+        if (!isPending) {
+            setOptimisticPeriodType(null)
+            setOptimisticPeriodValue(null)
+            setOptimisticTravelMode(null)
+        }
+    }, [isPending])
+
+    const navigate = (url: string) => {
+        startTransition(() => router.push(url))
+    }
+
+    const effectivePeriodType = isPending && optimisticPeriodType ? optimisticPeriodType : period.type
+    const effectiveTravelMode = isPending && optimisticTravelMode ? optimisticTravelMode : travelMode
 
     const setMemberFilter = (memberIds: string[]) => {
         const params = new URLSearchParams(searchParams.toString())
@@ -70,7 +100,7 @@ export function InsightsView({
         } else {
             params.set('members', memberIds.join(','))
         }
-        router.push(`${pathname}?${params.toString()}`)
+        navigate(`${pathname}?${params.toString()}`)
     }
 
     const toggleMember = (memberId: string) => {
@@ -81,11 +111,12 @@ export function InsightsView({
     }
 
     const setTravelMode = (mode: InsightsTravelMode) => {
+        setOptimisticTravelMode(mode)
         const params = new URLSearchParams(searchParams.toString())
         if (mode === 'all') params.delete('travel')
         else if (mode === 'travel') params.set('travel', 'only')
         else params.set('travel', 'exclude')
-        router.push(`${pathname}?${params.toString()}`)
+        navigate(`${pathname}?${params.toString()}`)
     }
 
     // Persist the latest selection so repeat visitors land on the same view.
@@ -109,10 +140,12 @@ export function InsightsView({
     }, [pathname, router, searchParams])
 
     const setSelection = (type: InsightsPeriod['type'], value: string) => {
+        setOptimisticPeriodType(type)
+        setOptimisticPeriodValue(value)
         const params = new URLSearchParams()
         params.set('period', type)
         params.set('value', value)
-        router.push(`${pathname}?${params.toString()}`)
+        navigate(`${pathname}?${params.toString()}`)
     }
 
     const togglePeriodType = (type: InsightsPeriod['type']) => {
@@ -126,10 +159,11 @@ export function InsightsView({
         }
     }
 
-    const currentValue =
+    const serverValue =
         period.type === 'statement' ? period.statementId :
         period.type === 'month' ? period.month :
         period.year
+    const currentValue = isPending && optimisticPeriodValue ? optimisticPeriodValue : serverValue
 
     return (
         <div className="container py-8">
@@ -138,17 +172,23 @@ export function InsightsView({
 
                 <div className="flex items-center gap-2 flex-wrap">
                     <div className="inline-flex rounded-md border bg-background p-0.5">
-                        {(['statement', 'month', 'year'] as const).map(type => (
-                            <Button
-                                key={type}
-                                variant={period.type === type ? 'default' : 'ghost'}
-                                size="sm"
-                                className="capitalize"
-                                onClick={() => togglePeriodType(type)}
-                            >
-                                {type}
-                            </Button>
-                        ))}
+                        {(['statement', 'month', 'year'] as const).map(type => {
+                            const isActive = effectivePeriodType === type
+                            const showSpinner = isPending && optimisticPeriodType === type
+                            return (
+                                <Button
+                                    key={type}
+                                    variant={isActive ? 'default' : 'ghost'}
+                                    size="sm"
+                                    className="capitalize"
+                                    onClick={() => togglePeriodType(type)}
+                                    disabled={isPending}
+                                >
+                                    {showSpinner && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
+                                    {type}
+                                </Button>
+                            )
+                        })}
                     </div>
 
                     <div className="inline-flex rounded-md border bg-background p-0.5">
@@ -156,20 +196,31 @@ export function InsightsView({
                             { mode: 'all' as const, label: 'All' },
                             { mode: 'travel' as const, label: 'Travel only' },
                             { mode: 'no-travel' as const, label: 'No travel' },
-                        ]).map(({ mode, label }) => (
-                            <Button
-                                key={mode}
-                                variant={travelMode === mode ? 'default' : 'ghost'}
-                                size="sm"
-                                onClick={() => setTravelMode(mode)}
-                            >
-                                {label}
-                            </Button>
-                        ))}
+                        ]).map(({ mode, label }) => {
+                            const isActive = effectiveTravelMode === mode
+                            const showSpinner = isPending && optimisticTravelMode === mode
+                            return (
+                                <Button
+                                    key={mode}
+                                    variant={isActive ? 'default' : 'ghost'}
+                                    size="sm"
+                                    onClick={() => setTravelMode(mode)}
+                                    disabled={isPending}
+                                >
+                                    {showSpinner && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
+                                    {label}
+                                </Button>
+                            )
+                        })}
                     </div>
 
-                    {period.type === 'month' && availableMonths.length > 0 && (
-                        <Select value={currentValue} onValueChange={v => setSelection('month', v)}>
+                    <Button variant="outline" size="sm" onClick={() => setIsDetectTripsOpen(true)}>
+                        <Plane className="h-3 w-3 mr-1.5" />
+                        Detect trips
+                    </Button>
+
+                    {effectivePeriodType === 'month' && availableMonths.length > 0 && (
+                        <Select value={currentValue} onValueChange={v => setSelection('month', v)} disabled={isPending}>
                             <SelectTrigger className="w-[180px]">
                                 <SelectValue placeholder="Select month" />
                             </SelectTrigger>
@@ -181,8 +232,8 @@ export function InsightsView({
                         </Select>
                     )}
 
-                    {period.type === 'year' && availableYears.length > 0 && (
-                        <Select value={currentValue} onValueChange={v => setSelection('year', v)}>
+                    {effectivePeriodType === 'year' && availableYears.length > 0 && (
+                        <Select value={currentValue} onValueChange={v => setSelection('year', v)} disabled={isPending}>
                             <SelectTrigger className="w-[120px]">
                                 <SelectValue placeholder="Select year" />
                             </SelectTrigger>
@@ -194,8 +245,8 @@ export function InsightsView({
                         </Select>
                     )}
 
-                    {period.type === 'statement' && availableStatements.length > 0 && (
-                        <Select value={currentValue} onValueChange={v => setSelection('statement', v)}>
+                    {effectivePeriodType === 'statement' && availableStatements.length > 0 && (
+                        <Select value={currentValue} onValueChange={v => setSelection('statement', v)} disabled={isPending}>
                             <SelectTrigger className="w-[260px]">
                                 <SelectValue placeholder="Select statement" />
                             </SelectTrigger>
@@ -215,6 +266,13 @@ export function InsightsView({
                 Edrian spend this month?". Re-introduce when transactions get
                 an explicit `member_id` (or split-amount). */}
 
+            <div
+                className={cn(
+                    'transition-opacity duration-200',
+                    isPending && 'opacity-50 pointer-events-none',
+                )}
+                aria-busy={isPending}
+            >
             <Card className="mb-6 animate-fade-in">
                 <CardContent className="p-6">
                     <p className="text-sm text-muted-foreground">{insights.periodLabel}</p>
@@ -237,6 +295,49 @@ export function InsightsView({
                     )}
                 </CardContent>
             </Card>
+
+            {tripBreakdown.length > 0 && (
+                <Card className="mb-6 animate-fade-in">
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+                        <CardTitle className="flex items-center gap-2 text-base">
+                            <Plane className="h-4 w-4" />
+                            Trips
+                        </CardTitle>
+                        <Button variant="ghost" size="sm" onClick={() => setIsDetectTripsOpen(true)}>
+                            Detect more
+                        </Button>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                            {tripBreakdown.map(trip => (
+                                <div
+                                    key={trip.labelId}
+                                    className="rounded-md border bg-card p-3"
+                                >
+                                    <div className="flex items-center gap-2">
+                                        <span
+                                            className={cn('inline-block h-2 w-2 rounded-full', !trip.labelColor && 'bg-primary/60')}
+                                            style={trip.labelColor ? { backgroundColor: trip.labelColor } : undefined}
+                                        />
+                                        <span className="font-medium text-sm capitalize truncate">
+                                            {trip.labelName}
+                                        </span>
+                                    </div>
+                                    <p className="mt-1 font-mono text-lg">
+                                        {formatCurrency(trip.amount, insights.currency)}
+                                    </p>
+                                    <p className="text-xs text-muted-foreground">
+                                        {formatDate(trip.startDate)} – {formatDate(trip.endDate)}
+                                    </p>
+                                    <p className="text-xs text-muted-foreground">
+                                        {trip.count} {trip.count === 1 ? 'transaction' : 'transactions'}
+                                    </p>
+                                </div>
+                            ))}
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
 
             {insights.transactionCount === 0 ? (
                 <EmptyPeriodCard period={period} />
@@ -365,6 +466,12 @@ export function InsightsView({
                     availableCategories={availableCategories}
                 />
             )}
+            </div>
+            <TripDetectionDialog
+                open={isDetectTripsOpen}
+                onOpenChange={setIsDetectTripsOpen}
+                currency={insights.currency}
+            />
         </div>
     )
 }
