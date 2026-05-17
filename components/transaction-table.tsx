@@ -8,7 +8,7 @@ import {
     TableHeader,
     TableRow
 } from '@/components/ui/table'
-import type { Tag } from '@/lib/supabase/database.types'
+import type { Tag } from '@/db/schema'
 import type { Transaction } from '@/lib/types/transaction'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import Link from 'next/link'
@@ -68,7 +68,7 @@ export function TransactionTable({
                         {enableTagging && <TableHead className="w-[180px]">Labels</TableHead>}
                         <TableHead className="text-right w-[120px]">Amount</TableHead>
                         {showSource && <TableHead className="w-[80px]">Source</TableHead>}
-                        <TableHead className="w-[50px]"></TableHead>
+                        <TableHead className="w-[80px]"></TableHead>
                     </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -106,7 +106,8 @@ import {
     TooltipProvider,
     TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { MinusCircle, Plane } from 'lucide-react'
+import { MinusCircle, Plane, Search } from 'lucide-react'
+import { SimilarTransactionsDialog } from '@/components/similar-transactions-dialog'
 
 interface TransactionRowProps {
     transaction: Transaction
@@ -143,6 +144,7 @@ function TransactionRow({
     const [isExcluded, setIsExcluded] = useState(transaction.isExcluded)
     const [exclusionReason, setExclusionReason] = useState(transaction.exclusionReason || '')
     const [isPopoverOpen, setIsPopoverOpen] = useState(false)
+    const [isSimilarOpen, setIsSimilarOpen] = useState(false)
 
     // Sync state when props change
     useEffect(() => {
@@ -190,6 +192,7 @@ function TransactionRow({
     }
 
     return (
+        <>
         <TableRow className={cn(isExcluded && "opacity-60 bg-muted/30")}>
             <TableCell className="font-medium text-muted-foreground w-[100px]">
                 {formatDate(transaction.date)}
@@ -292,63 +295,96 @@ function TransactionRow({
                     )}
                 </TableCell>
             )}
-            <TableCell className="w-[50px]">
-                <Popover open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
-                    <PopoverTrigger asChild>
-                        <Button
-                            variant="ghost"
-                            size="icon"
-                            className={cn(
-                                "h-8 w-8 hover:text-destructive",
-                                isExcluded ? "text-destructive" : "text-muted-foreground/50"
-                            )}
-                            onClick={(e) => {
-                                e.stopPropagation()
-                                handleToggleExclusion()
-                            }}
-                        >
-                            <TooltipProvider>
-                                <Tooltip>
-                                    <TooltipTrigger asChild>
-                                        <MinusCircle className="h-4 w-4" />
-                                    </TooltipTrigger>
-                                    <TooltipContent>
-                                        <p>{isExcluded ? "Include in total" : "Exclude from total"}</p>
-                                    </TooltipContent>
-                                </Tooltip>
-                            </TooltipProvider>
-                        </Button>
-                    </PopoverTrigger>
-                    {isExcluded && (
-                        <PopoverContent className="w-80" align="end" side="left">
-                            <div className="grid gap-4">
-                                <div className="space-y-2">
-                                    <h4 className="font-medium leading-none">Exclude Transaction</h4>
-                                    <p className="text-sm text-muted-foreground">
-                                        This transaction will not be counted in totals.
-                                    </p>
+            <TableCell className="w-[80px]">
+                <div className="flex items-center justify-end gap-0.5">
+                    <TooltipProvider>
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 text-muted-foreground/50 hover:text-foreground"
+                                    onClick={(e) => {
+                                        e.stopPropagation()
+                                        setIsSimilarOpen(true)
+                                    }}
+                                    aria-label="Find similar transactions"
+                                >
+                                    <Search className="h-4 w-4" />
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                                <p>Find similar</p>
+                            </TooltipContent>
+                        </Tooltip>
+                    </TooltipProvider>
+                    <Popover open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
+                        <PopoverTrigger asChild>
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                className={cn(
+                                    "h-8 w-8 hover:text-destructive",
+                                    isExcluded ? "text-destructive" : "text-muted-foreground/50"
+                                )}
+                                onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleToggleExclusion()
+                                }}
+                            >
+                                <TooltipProvider>
+                                    <Tooltip>
+                                        <TooltipTrigger asChild>
+                                            <MinusCircle className="h-4 w-4" />
+                                        </TooltipTrigger>
+                                        <TooltipContent>
+                                            <p>{isExcluded ? "Include in total" : "Exclude from total"}</p>
+                                        </TooltipContent>
+                                    </Tooltip>
+                                </TooltipProvider>
+                            </Button>
+                        </PopoverTrigger>
+                        {isExcluded && (
+                            <PopoverContent className="w-80" align="end" side="left">
+                                <div className="grid gap-4">
+                                    <div className="space-y-2">
+                                        <h4 className="font-medium leading-none">Exclude Transaction</h4>
+                                        <p className="text-sm text-muted-foreground">
+                                            This transaction will not be counted in totals.
+                                        </p>
+                                    </div>
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="reason">Reason (Optional)</Label>
+                                        <Input
+                                            id="reason"
+                                            defaultValue={exclusionReason}
+                                            placeholder="e.g. Duplicate, Transfer"
+                                            onBlur={(e) => handleReasonUpdate(e.target.value)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter') {
+                                                    handleReasonUpdate(e.currentTarget.value)
+                                                    setIsPopoverOpen(false)
+                                                }
+                                            }}
+                                        />
+                                    </div>
                                 </div>
-                                <div className="grid gap-2">
-                                    <Label htmlFor="reason">Reason (Optional)</Label>
-                                    <Input
-                                        id="reason"
-                                        defaultValue={exclusionReason}
-                                        placeholder="e.g. Duplicate, Transfer"
-                                        onBlur={(e) => handleReasonUpdate(e.target.value)}
-                                        onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                                handleReasonUpdate(e.currentTarget.value)
-                                                setIsPopoverOpen(false)
-                                            }
-                                        }}
-                                    />
-                                </div>
-                            </div>
-                        </PopoverContent>
-                    )}
-                </Popover>
+                            </PopoverContent>
+                        )}
+                    </Popover>
+                </div>
             </TableCell>
         </TableRow>
+        <SimilarTransactionsDialog
+            open={isSimilarOpen}
+            onOpenChange={setIsSimilarOpen}
+            targetId={transaction.id}
+            targetDescription={transaction.description}
+            targetCurrency={transaction.currency}
+            availableCategories={availableCategories}
+            availableLabels={availableTags}
+        />
+        </>
     )
 }
 
