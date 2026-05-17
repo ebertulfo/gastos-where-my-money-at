@@ -50,3 +50,10 @@ node_modules/
 
 # private test fixtures (real bank statements — never commit)
 /tests/private/
+
+# clerk configuration (can include secrets)
+/.clerk/
+.env*.local
+
+# playwright-mcp runtime logs
+/.playwright-mcp/
