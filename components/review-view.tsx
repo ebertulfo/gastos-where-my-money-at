@@ -10,10 +10,11 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
-import type { Tag } from '@/lib/supabase/database.types'
+import { StatementMetadataDialog } from '@/components/statement-metadata-dialog'
+import type { Tag } from '@/db/schema'
 import type { ImportReview, Statement as UIStatement, StatementReconciliation } from '@/lib/types/transaction'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
-import { AlertTriangle, Check, CheckCircle2, Info, Loader2 } from 'lucide-react'
+import { AlertTriangle, Check, CheckCircle2, Info, Loader2, Pencil } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
@@ -37,6 +38,7 @@ export function ReviewView({ statementId, review, availableTags, availableCatego
   )
   const [isConfirming, setIsConfirming] = useState(false)
   const [isRejecting, setIsRejecting] = useState(false)
+  const [isEditingMetadata, setIsEditingMetadata] = useState(false)
 
   const setDuplicateDecision = async (importId: string, decision: 'keep_existing' | 'add_new') => {
     setDuplicateDecisions(prev => ({ ...prev, [importId]: decision }))
@@ -121,6 +123,12 @@ export function ReviewView({ statementId, review, availableTags, availableCatego
 
       <Card className="mb-8 animate-fade-in">
         <CardContent className="p-6">
+          <div className="flex items-center justify-end mb-2">
+            <Button variant="ghost" size="sm" onClick={() => setIsEditingMetadata(true)}>
+              <Pencil className="h-3 w-3 mr-1" />
+              Edit
+            </Button>
+          </div>
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             <div>
               <p className="text-sm text-muted-foreground">Bank / Account</p>
@@ -252,6 +260,21 @@ export function ReviewView({ statementId, review, availableTags, availableCatego
       {duplicates.length > 0 && false && (
         <button onClick={() => setDuplicateDecision(duplicates[0].importId, 'add_new')} />
       )}
+
+      <StatementMetadataDialog
+        open={isEditingMetadata}
+        onOpenChange={setIsEditingMetadata}
+        statementId={statementId}
+        initial={{
+          bank: statement.bankRaw,
+          periodStart: statement.periodStart,
+          periodEnd: statement.periodEnd,
+          currency: statement.currency,
+          expectedTotal: reconciliation.expectedTotal,
+          expectedTotalKind: reconciliation.expectedTotalKind,
+          previousBalance: statement.previousBalance,
+        }}
+      />
     </main>
   )
 }
