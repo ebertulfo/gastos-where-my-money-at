@@ -1,46 +1,41 @@
-import { createClient } from '@/lib/supabase/middleware'
-import { type NextRequest } from 'next/server'
+import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
+import { NextResponse } from 'next/server';
 
-export async function middleware(request: NextRequest) {
-    const { supabase, response } = createClient(request)
+// Public routes — landing + Clerk-rendered auth screens.
+const isPublicRoute = createRouteMatcher([
+  '/',
+  '/login(.*)',
+  '/sign-in(.*)',
+  '/sign-up(.*)',
+]);
 
-    const {
-        data: { user },
-    } = await supabase.auth.getUser()
+export default clerkMiddleware(async (auth, req) => {
+  const { userId } = await auth();
+  const { pathname } = req.nextUrl;
 
-    if (
-        !user &&
-        !request.nextUrl.pathname.startsWith('/login') &&
-        !request.nextUrl.pathname.startsWith('/auth') &&
-        request.nextUrl.pathname !== '/'
-    ) {
-        // no user, potentially respond by redirecting the user to the login page
-        const url = request.nextUrl.clone()
-        url.pathname = '/login'
-        return Response.redirect(url)
-    }
+  // Authed users hitting the landing or login pages get bounced to /upload —
+  // matches the previous Supabase middleware's UX so muscle memory still works.
+  if (userId && (pathname === '/' || pathname.startsWith('/login') || pathname.startsWith('/sign-in') || pathname.startsWith('/sign-up'))) {
+    const url = req.nextUrl.clone();
+    url.pathname = '/upload';
+    return NextResponse.redirect(url);
+  }
 
-    if (user) {
-        // if user is signed in and trying to access landing or login, redirect to dashboard
-        if (request.nextUrl.pathname === '/' || request.nextUrl.pathname.startsWith('/login')) {
-            const url = request.nextUrl.clone()
-            url.pathname = '/upload'
-            return Response.redirect(url)
-        }
-    }
+  // Unauth users hitting protected routes get sent to /login.
+  if (!userId && !isPublicRoute(req)) {
+    const url = req.nextUrl.clone();
+    url.pathname = '/login';
+    return NextResponse.redirect(url);
+  }
 
-    return response
-}
+  return NextResponse.next();
+});
 
 export const config = {
-    matcher: [
-        /*
-         * Match all request paths except for the ones starting with:
-         * - _next/static (static files)
-         * - _next/image (image optimization files)
-         * - favicon.ico (favicon file)
-         * Feel free to modify this pattern to include more paths.
-         */
-        '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
-    ],
-}
+  matcher: [
+    // Skip Next.js internals and static files unless found in search params.
+    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    // Always run for API routes.
+    '/(api|trpc)(.*)',
+  ],
+};
